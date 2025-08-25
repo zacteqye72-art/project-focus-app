@@ -133,6 +133,8 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  console.log('🔄 All windows closed, cleaning up...');
+  cleanupAllMonitoring();
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -195,13 +197,36 @@ function startMonitoring() {
   if (!win || monitoringInterval) return;
   monitoringInterval = setInterval(() => {
     if (monitoringState.privacy) return; // respect privacy mode
+    
+    // Check if window still exists and is not destroyed
+    const currentWin = BrowserWindow.getAllWindows()[0];
+    if (!currentWin || currentWin.isDestroyed()) {
+      stopMonitoring(); // Stop monitoring if no valid window
+      return;
+    }
+    
     getFrontmostInfo((err, info) => {
       if (err || !info) return;
-      const classification = classifyActivity(info, monitoringState.rules);
-      win.webContents.send('activity:update', { ...info, classification });
-      if (classification === 'distracted' && monitoringState.lastClassification !== 'distracted') {
-        win.webContents.send('activity:distraction', info);
+      
+      // Double-check window validity before sending IPC messages
+      if (currentWin.isDestroyed()) {
+        stopMonitoring();
+        return;
       }
+      
+      const classification = classifyActivity(info, monitoringState.rules);
+      
+      try {
+        currentWin.webContents.send('activity:update', { ...info, classification });
+        if (classification === 'distracted' && monitoringState.lastClassification !== 'distracted') {
+          currentWin.webContents.send('activity:distraction', info);
+        }
+      } catch (error) {
+        console.warn('⚠️ Failed to send activity update (window may be destroyed):', error.message);
+        stopMonitoring();
+        return;
+      }
+      
       monitoringState.lastClassification = classification;
     });
   }, 4000);
@@ -215,7 +240,12 @@ function stopMonitoring() {
 }
 
 app.on('browser-window-created', () => startMonitoring());
-app.on('before-quit', () => stopMonitoring());
+app.on('before-quit', () => {
+  console.log('🔄 App is quitting, cleaning up...');
+  cleanupAllMonitoring();
+});
+
+// Note: window-all-closed handler is defined earlier in the file
 
 ipcMain.on('rules:update', (evt, payload) => {
   monitoringState.rules = { ...monitoringState.rules, ...payload };
@@ -277,8 +307,12 @@ ipcMain.on('island:action', (event, action) => {
   const mainWindow = BrowserWindow.getAllWindows().find(win => 
     win !== dynamicIslandWindow && !win.isDestroyed()
   );
-  if (mainWindow) {
-    mainWindow.webContents.send('island:action', action);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('island:action', action);
+    } catch (error) {
+      console.warn('⚠️ Failed to send island action (window may be destroyed):', error.message);
+    }
   }
 });
 
@@ -439,13 +473,17 @@ function startWindowMonitoring() {
             win !== dynamicIslandWindow && !win.isDestroyed()
           );
           
-          if (mainWindow) {
-            mainWindow.webContents.send('window:changed', {
-              previousWindow: lastActiveWindow,
-              currentWindow: currentWindow,
-              screenshotPath: screenshotPath,
-              timestamp: Date.now()
-            });
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            try {
+              mainWindow.webContents.send('window:changed', {
+                previousWindow: lastActiveWindow,
+                currentWindow: currentWindow,
+                screenshotPath: screenshotPath,
+                timestamp: Date.now()
+              });
+            } catch (error) {
+              console.warn('⚠️ Failed to send window change event (window may be destroyed):', error.message);
+            }
           }
           
           // If AI analysis is enabled, analyze the screenshot with cooldown
@@ -477,6 +515,22 @@ function stopWindowMonitoring() {
     aiAnalysisEnabled = false;
     console.log('🛑 Stopped window monitoring');
   }
+}
+
+// Enhanced cleanup function for app shutdown
+function cleanupAllMonitoring() {
+  console.log('🧹 Cleaning up all monitoring and timers...');
+  
+  // Stop window monitoring
+  stopWindowMonitoring();
+  
+  // Stop activity monitoring
+  stopMonitoring();
+  
+  // Disable AI analysis
+  disableAIAnalysis();
+  
+  console.log('✅ All monitoring cleaned up');
 }
 
 function enableAIAnalysis(workContext) {
@@ -555,7 +609,7 @@ async function analyzeScreenshotForFocus(screenshotPath) {
         win !== dynamicIslandWindow && !win.isDestroyed()
       );
       
-      if (mainWindow) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
         const resultToSend = typeof finalResult === 'object' ? finalResult : { status: finalResult, reason: '未提供理由' };
         const rawToSend = typeof focusAnalysis === 'object' ? focusAnalysis : { status: focusAnalysis, reason: '未提供理由' };
         
@@ -569,16 +623,20 @@ async function analyzeScreenshotForFocus(screenshotPath) {
           console.warn('⚠️ Failed to show distraction alert:', e?.message || e);
         }
 
-        mainWindow.webContents.send('focus:analysis', {
-          result: resultToSend.status,
-          reason: resultToSend.reason,
-          workContext: currentWorkContext,
-          screenshotPath: screenshotPath,
-          timestamp: Date.now(),
-          rawResult: rawToSend.status,
-          rawReason: rawToSend.reason,
-          consensus: consensusCount
-        });
+        try {
+          mainWindow.webContents.send('focus:analysis', {
+            result: resultToSend.status,
+            reason: resultToSend.reason,
+            workContext: currentWorkContext,
+            screenshotPath: screenshotPath,
+            timestamp: Date.now(),
+            rawResult: rawToSend.status,
+            rawReason: rawToSend.reason,
+            consensus: consensusCount
+          });
+        } catch (error) {
+          console.warn('⚠️ Failed to send focus analysis (window may be destroyed):', error.message);
+        }
       }
     }
     

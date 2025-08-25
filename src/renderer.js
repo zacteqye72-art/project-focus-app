@@ -46,6 +46,11 @@
       console.log('⚠️ 配置加载错误:', e);
     }
     
+    // 初始化工作上下文指示器
+    setTimeout(() => {
+      updateContextIndicator();
+    }, 500);
+    
     // 初始化系统级Dynamic Island
     setTimeout(() => {
       updateSystemIsland();
@@ -66,10 +71,119 @@
     chat.scrollTop = chat.scrollHeight;
   }
 
+  // User context validation state
+  let userWorkContext = {
+    content: null,     // 工作内容 (AI、专注力、新能源等)
+    method: null,      // 工作方式 (写作、研究、coding等)
+    isValid: false
+  };
+
   let chatMessages = [
-    { role: 'system', content: 'You are an attentive productivity coach. When user describes their work plan, respond with encouragement and then end your message with exactly "START_FOCUS_SESSION" to trigger the focus timer.' },
-    { role: 'assistant', content: 'What would you like to work on today?' },
+    { role: 'system', content: 'You are an attentive productivity coach. Before starting any focus session, you MUST ensure the user has clearly described BOTH their work content (what field they work in, like AI, focus research, new energy, etc.) AND their work method (how they work, like writing, research, coding, etc.). Only after getting this complete information should you respond with encouragement and end your message with exactly "START_FOCUS_SESSION" to trigger the focus timer. If the user hasn\'t provided complete information, ask specific follow-up questions to understand their work context better.' },
+    { role: 'assistant', content: '欢迎使用 Project Focus！在开始专注会话之前，我需要了解一下您的工作背景：\n\n1. **您主要从事什么领域的工作？**（比如：AI研究、专注力训练、新能源开发、软件工程等）\n\n2. **您通常采用什么工作方式？**（比如：写作、研究、编程、设计、分析等）\n\n请告诉我这两个方面的信息，这样我就能为您提供更精准的专注指导和监控。' },
   ];
+
+  // Function to analyze user input for work context
+  function analyzeWorkContext(userMessage) {
+    const message = userMessage.toLowerCase();
+    
+    // Check for work content keywords
+    const contentKeywords = [
+      'ai', '人工智能', '机器学习', 'ml', 'deep learning',
+      '专注力', 'focus', 'attention', '注意力',
+      '新能源', 'renewable energy', '太阳能', '风能', 'solar', 'wind',
+      '软件', 'software', '编程', 'programming', '开发', 'development',
+      '研究', 'research', '学术', 'academic',
+      '设计', 'design', 'ui', 'ux',
+      '数据', 'data', '分析', 'analysis', 'analytics',
+      '市场', 'marketing', '销售', 'sales',
+      '教育', 'education', '教学', 'teaching',
+      '医疗', 'medical', '健康', 'health',
+      '金融', 'finance', '投资', 'investment'
+    ];
+    
+    // Check for work method keywords  
+    const methodKeywords = [
+      '写作', 'writing', '撰写', '文章', 'article', 'blog',
+      '研究', 'research', '调研', '分析', 'analysis',
+      '编程', 'coding', 'programming', '开发', 'develop', 'code',
+      '设计', 'design', '绘图', 'drawing', 'sketch',
+      '阅读', 'reading', '学习', 'learning', '复习', 'review',
+      '会议', 'meeting', '讨论', 'discussion',
+      '实验', 'experiment', '测试', 'testing',
+      '策划', 'planning', '规划', '管理', 'management'
+    ];
+    
+    const hasContent = contentKeywords.some(keyword => message.includes(keyword));
+    const hasMethod = methodKeywords.some(keyword => message.includes(keyword));
+    
+    return { hasContent, hasMethod };
+  }
+
+  // Function to update work context validation
+  function updateWorkContext(userMessage) {
+    const analysis = analyzeWorkContext(userMessage);
+    
+    if (analysis.hasContent && !userWorkContext.content) {
+      userWorkContext.content = userMessage;
+    }
+    
+    if (analysis.hasMethod && !userWorkContext.method) {
+      userWorkContext.method = userMessage;
+    }
+    
+    // Check if we have both content and method
+    userWorkContext.isValid = userWorkContext.content && userWorkContext.method;
+    
+    // Update UI indicator
+    updateContextIndicator();
+    
+    return userWorkContext.isValid;
+  }
+
+  // Function to update context validation indicator in UI
+  function updateContextIndicator() {
+    // Check if we have a context indicator element, if not create one
+    let indicator = document.getElementById('contextIndicator');
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.id = 'contextIndicator';
+      indicator.style.cssText = `
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        padding: 8px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 600;
+        z-index: 1000;
+        transition: all 0.3s ease;
+        min-width: 120px;
+        text-align: center;
+      `;
+      document.body.appendChild(indicator);
+    }
+    
+    const hasContent = !!userWorkContext.content;
+    const hasMethod = !!userWorkContext.method;
+    
+    if (userWorkContext.isValid) {
+      indicator.textContent = '✅ 工作背景完整';
+      indicator.style.backgroundColor = '#10b981';
+      indicator.style.color = 'white';
+    } else if (hasContent || hasMethod) {
+      const missing = [];
+      if (!hasContent) missing.push('工作领域');
+      if (!hasMethod) missing.push('工作方式');
+      indicator.textContent = `⚠️ 缺少：${missing.join('、')}`;
+      indicator.style.backgroundColor = '#f59e0b';
+      indicator.style.color = 'white';
+    } else {
+      indicator.textContent = '📝 请提供工作背景';
+      indicator.style.backgroundColor = '#6b7280';
+      indicator.style.color = 'white';
+    }
+  }
 
   // Focus session state
   let focusSessionActive = false;
@@ -82,26 +196,68 @@
   async function sendChat() {
     const text = (chatInput.value || '').trim();
     if (!text) return;
+    
     addBubble('user', text);
     chatMessages.push({ role: 'user', content: text });
     chatInput.value = '';
+    
+    // Update work context analysis
+    updateWorkContext(text);
+    
+    // Add context validation info to the messages for AI
+    const enhancedMessages = [...chatMessages];
+    if (!userWorkContext.isValid) {
+      const contextStatus = {
+        hasContent: !!userWorkContext.content,
+        hasMethod: !!userWorkContext.method,
+        missingInfo: []
+      };
+      
+      if (!userWorkContext.content) {
+        contextStatus.missingInfo.push('work content/field');
+      }
+      if (!userWorkContext.method) {
+        contextStatus.missingInfo.push('work method/approach');
+      }
+      
+      // Add a system message with context validation status
+      enhancedMessages.push({
+        role: 'system',
+        content: `CONTEXT VALIDATION STATUS: User has ${contextStatus.hasContent ? 'provided' : 'NOT provided'} work content and ${contextStatus.hasMethod ? 'provided' : 'NOT provided'} work method. Missing: ${contextStatus.missingInfo.join(', ')}. DO NOT start focus session until both are clearly provided.`
+      });
+    } else {
+      // Add validation success message
+      enhancedMessages.push({
+        role: 'system',
+        content: `CONTEXT VALIDATION STATUS: Complete! User has provided both work content and method. You may now proceed with focus session if appropriate.`
+      });
+    }
+    
     try {
       const provider = localStorage.getItem('ai_provider') || 'openrouter';
       const apiKey = localStorage.getItem('ai_api_key') || '';
-      const reply = await window.focusAPI.ai.chat(chatMessages, provider, apiKey);
+      const reply = await window.focusAPI.ai.chat(enhancedMessages, provider, apiKey);
       if (reply?.content) {
         let content = reply.content;
         
-        // Check if AI wants to start focus session
+        // Check if AI wants to start focus session - but only if context is valid
         if (content.includes('START_FOCUS_SESSION')) {
-          content = content.replace('START_FOCUS_SESSION', '').trim();
-          addBubble('assistant', content);
-          chatMessages.push({ role: 'assistant', content: content });
-          
-          // Show session configuration modal
-          setTimeout(() => {
-            showSessionConfigModal();
-          }, 1500);
+          if (userWorkContext.isValid) {
+            content = content.replace('START_FOCUS_SESSION', '').trim();
+            addBubble('assistant', content);
+            chatMessages.push({ role: 'assistant', content: content });
+            
+            // Show session configuration modal
+            setTimeout(() => {
+              showSessionConfigModal();
+            }, 1500);
+          } else {
+            // AI tried to start session but context is invalid - override
+            content = content.replace('START_FOCUS_SESSION', '').trim();
+            content += '\n\n（系统提示：我还需要更完整的工作背景信息才能开始专注会话。请确保告诉我您的工作领域和工作方式。）';
+            addBubble('assistant', content);
+            chatMessages.push({ role: 'assistant', content: content });
+          }
         } else {
           addBubble('assistant', content);
           chatMessages.push({ role: 'assistant', content: content });
