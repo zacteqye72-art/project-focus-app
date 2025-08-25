@@ -795,64 +795,48 @@ function parseAIResponse(response) {
 }
 
 async function callAIWithVision(provider, apiKey, payload, base64Image, analysisPrompt) {
-  let url;
-  let headers;
+  // Always use qwen-vl-max for all vision analysis, regardless of provider
+  const url = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
+  const headers = {
+    'content-type': 'application/json',
+    'authorization': `Bearer ${apiKey}`
+  };
   
-  switch (provider) {
-    case 'bailian':
-    case 'dashscope':
-      url = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
-      headers = {
-        'content-type': 'application/json',
-        'authorization': `Bearer ${apiKey}`
-      };
-      // Adapt payload for DashScope - special format for multimodal
-      const dashScopePayload = {
-        model: 'qwen-vl-plus',
-        input: {
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { text: analysisPrompt },
-                { image: `data:image/png;base64,${base64Image}` }
-              ]
-            }
+  // Use qwen-vl-max model with DashScope format for all providers
+  const dashScopePayload = {
+    model: 'qwen-vl-max',
+    input: {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { text: analysisPrompt },
+            { image: `data:image/png;base64,${base64Image}` }
           ]
-        },
-        parameters: {
-          max_tokens: payload.max_tokens,
-          temperature: payload.temperature
         }
-      };
-      console.log('🔗 DashScope URL:', url);
-      console.log('🔗 DashScope headers:', headers);
-      console.log('🔗 DashScope payload:', JSON.stringify(dashScopePayload, null, 2));
-      
-      const dashResult = await postJsonCustom(url, headers, dashScopePayload);
-      console.log('🔗 DashScope raw result:', JSON.stringify(dashResult, null, 2));
-      
-      // DashScope multimodal response format is different
-      const content = dashResult?.output?.choices?.[0]?.message?.content?.[0]?.text || 
-                     dashResult?.output?.text || 
-                     'UNCLEAR';
-      console.log('🔗 Extracted content:', content);
-      
-      return { content: content };
-      
-    case 'openai':
-      url = 'https://api.openai.com/v1/chat/completions';
-      payload.model = 'gpt-4-vision-preview';
-      return await postJson(url, apiKey, payload);
-      
-    case 'openrouter':
-      url = 'https://openrouter.ai/api/v1/chat/completions';
-      payload.model = 'anthropic/claude-3-haiku:beta';
-      return await postJson(url, apiKey, payload);
-      
-    default:
-      throw new Error(`Vision analysis not supported for provider: ${provider}`);
-  }
+      ]
+    },
+    parameters: {
+      max_tokens: payload.max_tokens,
+      temperature: payload.temperature
+    }
+  };
+  
+  console.log('🔗 Using qwen-vl-max for vision analysis');
+  console.log('🔗 DashScope URL:', url);
+  console.log('🔗 DashScope headers:', headers);
+  console.log('🔗 DashScope payload:', JSON.stringify(dashScopePayload, null, 2));
+  
+  const dashResult = await postJsonCustom(url, headers, dashScopePayload);
+  console.log('🔗 DashScope raw result:', JSON.stringify(dashResult, null, 2));
+  
+  // DashScope multimodal response format
+  const content = dashResult?.output?.choices?.[0]?.message?.content?.[0]?.text || 
+                 dashResult?.output?.text || 
+                 'UNCLEAR';
+  console.log('🔗 Extracted content:', content);
+  
+  return { content: content };
 }
 
 // Old monitoring functions removed - replaced by window monitoring with AI analysis
@@ -924,72 +908,25 @@ ipcMain.handle('ai:chat', async (evt, { messages, provider, apiKey }) => {
       return { role: 'assistant', content: reply };
     }
 
-    let url, model, headers;
+    // Always use qwen-plus for all text chat, regardless of provider
+    const url = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation';
+    const payload = {
+      model: 'qwen-plus',
+      input: { messages },
+      parameters: { temperature: 0.3, result_format: 'message' }
+    };
+    const headers = {
+      'content-type': 'application/json',
+      'authorization': `Bearer ${apiKey}`
+    };
     
-    switch (provider) {
-      case 'bailian':
-        // 阿里云百炼使用 DashScope 的 API 端点
-        url = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation';
-        const bailianPayload = {
-          model: 'qwen-plus',
-          input: { messages },
-          parameters: { temperature: 0.3, result_format: 'message' }
-        };
-        const bailianHeaders = {
-          'content-type': 'application/json',
-          'authorization': `Bearer ${apiKey}`
-        };
-        const bailianResult = await postJsonCustom(url, bailianHeaders, bailianPayload);
-        const bailianContent = bailianResult?.output?.text || bailianResult?.output?.choices?.[0]?.message?.content || bailianResult?.message || 'Bailian API error';
-        return { role: 'assistant', content: bailianContent };
-        break;
-        
-      case 'dashscope':
-        url = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation';
-        const dashPayload = {
-          model: 'qwen-turbo',
-          input: { messages },
-          parameters: { temperature: 0.3 }
-        };
-        const dashHeaders = {
-          'content-type': 'application/json',
-          'authorization': `Bearer ${apiKey}`,
-        };
-        return await postJsonCustom(url, dashHeaders, dashPayload);
-        
-      case 'siliconflow':
-        url = 'https://api.siliconflow.cn/v1/chat/completions';
-        model = 'Qwen/Qwen2.5-7B-Instruct';
-        break;
-        
-      case 'deepseek':
-        url = 'https://api.deepseek.com/chat/completions';
-        model = 'deepseek-chat';
-        break;
-        
-      case 'openrouter':
-        url = 'https://openrouter.ai/api/v1/chat/completions';
-        model = 'qwen/qwen-2.5-7b-instruct:free'; // Free Qwen model
-        break;
-        
-      default: // openai
-        url = 'https://api.openai.com/v1/chat/completions';
-        model = 'gpt-4o-mini';
-        break;
-    }
+    console.log('🔗 Using qwen-plus for text chat');
+    console.log('🔗 DashScope Text URL:', url);
     
-    const payload = { model, messages, temperature: 0.3 };
-    const json = await postJson(url, apiKey, payload);
+    const result = await postJsonCustom(url, headers, payload);
+    const content = result?.output?.text || result?.output?.choices?.[0]?.message?.content || result?.message || 'Qwen-plus API error';
     
-    // Handle DashScope response format
-    if (provider === 'dashscope') {
-      const content = json?.output?.text || json?.output?.choices?.[0]?.message?.content || 'DashScope error';
-      return { role: 'assistant', content };
-    }
-    
-    // Standard OpenAI format
-    const content = json?.choices?.[0]?.message?.content || json?.data || JSON.stringify(json).slice(0,800);
-    return { role: 'assistant', content };
+    return { role: 'assistant', content: content };
   } catch (e) {
     return { role: 'assistant', content: 'AI error: ' + String(e?.message || e) };
   }
