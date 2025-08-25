@@ -36,11 +36,6 @@
         localStorage.setItem('ai_provider', defaultConfig.provider);
         localStorage.setItem('ai_api_key', defaultConfig.apiKey);
         console.log('✅ 已设置配置:', defaultConfig.provider);
-        
-        // 显示配置已加载的提示
-        setTimeout(() => {
-          showIsland(`配置已加载: ${defaultConfig.provider}`);
-        }, 1000);
       }
     } catch (e) {
       console.log('⚠️ 配置加载错误:', e);
@@ -54,12 +49,12 @@
     // 初始化系统级Dynamic Island
     setTimeout(() => {
       updateSystemIsland();
-    }, 2000);
+    }, 1000);
     
-    // 测试窗口监控功能
+    // 静默测试窗口监控功能
     setTimeout(() => {
       testWindowMonitoring();
-    }, 3000);
+    }, 2000);
   })();
 
   // Chat helpers
@@ -386,7 +381,7 @@
       handleFocusAnalysis(data);
     });
     
-    addBubble('assistant', '👁️ Window monitoring started! I\'ll track your window changes and take screenshots.');
+    console.log('👁️ Window monitoring started');
   }
   
   function stopWindowMonitoring() {
@@ -398,7 +393,7 @@
     // Disable AI analysis
     window.focusAPI.aiAnalysis.disable();
     
-    addBubble('assistant', '🛑 Window monitoring stopped.');
+    console.log('🛑 Window monitoring stopped');
   }
   
   function handleWindowChange(data) {
@@ -448,22 +443,18 @@
     try {
       console.log('🧪 Testing window monitoring...');
       
-      // Test getting current window
+      // Test getting current window (silent test)
       const currentResult = await window.focusAPI?.windowMonitoring?.getCurrent();
       if (currentResult?.success) {
         console.log('✅ Current window:', currentResult.window);
-        showIsland(`📱 Current: ${currentResult.window.split(' - ')[0]}`);
       }
       
-      // Test screenshot capability
+      // Test screenshot capability (silent test)
       const screenshotResult = await window.focusAPI?.windowMonitoring?.testScreenshot();
       if (screenshotResult?.success) {
         console.log('✅ Test screenshot saved:', screenshotResult.path);
-        showIsland('📸 Test screenshot saved!');
-        addBubble('assistant', `📸 Test screenshot saved to: ${screenshotResult.path.split('/').pop()}`);
       } else {
         console.error('❌ Screenshot test failed:', screenshotResult?.error);
-        showIsland('❌ Screenshot test failed');
       }
     } catch (error) {
       console.error('❌ Window monitoring test error:', error);
