@@ -46,8 +46,22 @@
     window.addEventListener('DOMContentLoaded', () => {
       const closeBtn = document.getElementById('closeBtn');
       closeBtn?.addEventListener('click', () => {
+        // Close the alert window without transferring focus
         window.close();
       });
+      
+      // Handle keyboard events
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          window.close();
+        }
+      });
+      
+      // Auto-focus the close button for keyboard accessibility
+      setTimeout(() => {
+        closeBtn?.focus();
+      }, 100);
     });
   </script>
   </head>
@@ -59,6 +73,7 @@
   </div>
 </body>
 </html>
+
 
 
 

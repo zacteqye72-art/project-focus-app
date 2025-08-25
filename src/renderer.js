@@ -192,6 +192,13 @@
   let timeRemaining = sessionDuration;
   let sessionTimer = null;
   let isAIOverridingStatus = false; // Flag to prevent time-based color changes when AI detects distraction
+  
+  // Session tracking data
+  let sessionData = {
+    distractions: [], // Array of distraction events
+    windowChanges: [], // Array of window change events
+    focusEvents: [] // Array of focus analysis events
+  };
 
   async function sendChat() {
     const text = (chatInput.value || '').trim();
@@ -399,8 +406,16 @@
     
     console.log('🔄 Window changed:', { previousWindow, currentWindow, screenshotPath });
     
-    // Update Dynamic Island color based on window change
+    // Record window change event if session is active
     if (focusSessionActive) {
+      sessionData.windowChanges.push({
+        timestamp: timestamp,
+        previousWindow: previousWindow,
+        currentWindow: currentWindow,
+        screenshotPath: screenshotPath,
+        sessionTime: Date.now() - sessionStartTime
+      });
+      
       // Change to yellow to indicate potential distraction
       isAIOverridingStatus = true;
       focusStatus = 'yellow';
@@ -470,6 +485,7 @@
       let statusEmoji = '';
       let statusMessage = '';
       let newFocusStatus = focusStatus;
+      let isDistraction = false;
       
       // Clean up the result string and check for various patterns
       const cleanResult = result?.toString().trim().toLowerCase() || '';
@@ -488,6 +504,7 @@
         statusMessage = '半分心';
         newFocusStatus = 'yellow';
         isAIOverridingStatus = true;
+        isDistraction = true;
       } else if (cleanResult.includes('分心中') || cleanResult.includes('分心') || 
                  cleanResult.includes('distracted') || cleanResult === '1' || 
                  cleanResult.includes('1.') || cleanResult.includes('1、')) {
@@ -495,10 +512,38 @@
         statusMessage = '分心中';
         newFocusStatus = 'red';
         isAIOverridingStatus = true;
+        isDistraction = true;
       } else {
         statusEmoji = '❓';
         statusMessage = `状态不明 (${result})`;
         console.warn('🤖 Unknown AI result format:', result);
+      }
+      
+      // Record focus analysis event
+      sessionData.focusEvents.push({
+        timestamp: timestamp,
+        result: result,
+        reason: reason,
+        status: statusMessage,
+        isDistraction: isDistraction,
+        screenshotPath: screenshotPath,
+        sessionTime: Date.now() - sessionStartTime
+      });
+      
+      // Record distraction event if detected
+      if (isDistraction) {
+        const currentWindow = sessionData.windowChanges.length > 0 ? 
+          sessionData.windowChanges[sessionData.windowChanges.length - 1]?.currentWindow : 'Unknown';
+        
+        sessionData.distractions.push({
+          timestamp: timestamp,
+          type: statusMessage,
+          reason: reason,
+          currentWindow: currentWindow,
+          screenshotPath: screenshotPath,
+          sessionTime: Date.now() - sessionStartTime,
+          severity: newFocusStatus === 'red' ? 'high' : 'medium'
+        });
       }
       
       // Update focus status and Dynamic Island
@@ -660,6 +705,105 @@
     }, 100);
   }
 
+  function showSessionSummary(sessionLengthMins, actualMins) {
+    // Calculate statistics
+    const distractionCount = sessionData.distractions.length;
+    const windowChangeCount = sessionData.windowChanges.length;
+    const focusPercentage = Math.round((1 - (distractionCount / Math.max(sessionData.focusEvents.length, 1))) * 100);
+    
+    // Format duration
+    const formatDuration = (mins) => {
+      const hours = Math.floor(mins / 60);
+      const minutes = mins % 60;
+      return hours > 0 ? `${hours}小时${minutes}分钟` : `${minutes}分钟`;
+    };
+    
+    // Create distraction timeline
+    const distractionList = sessionData.distractions.map((distraction, index) => {
+      const timeFromStart = Math.floor(distraction.sessionTime / 1000 / 60); // minutes
+      const severity = distraction.severity === 'high' ? '🚨' : '⚠️';
+      const windowInfo = distraction.currentWindow ? 
+        distraction.currentWindow.split(' - ').slice(0, 2).join(' - ') : 'Unknown';
+      
+      return `
+        <div style="display:flex;gap:12px;padding:12px;margin:8px 0;background:#f8f9fa;border-radius:8px;border-left:4px solid ${distraction.severity === 'high' ? '#ef4444' : '#f59e0b'}">
+          <div style="font-size:18px">${severity}</div>
+          <div style="flex:1">
+            <div style="font-weight:600;color:#374151">${distraction.type}</div>
+            <div style="font-size:14px;color:#6b7280;margin:4px 0">
+              第${timeFromStart}分钟 • ${windowInfo}
+            </div>
+            <div style="font-size:14px;color:#4b5563">
+              ${distraction.reason || '未提供具体原因'}
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+    
+    const body = `
+      <div style="display:grid;gap:20px;max-height:400px;overflow-y:auto">
+        <!-- Session Overview -->
+        <div style="text-align:center;padding:20px;background:linear-gradient(135deg, #10b981 0%, #059669 100%);border-radius:12px;color:white">
+          <h3 style="margin:0 0 8px 0;font-size:24px">🎉 Session完成！</h3>
+          <div style="font-size:16px;opacity:0.9">专注时长：${formatDuration(actualMins)} / ${formatDuration(sessionLengthMins)}</div>
+        </div>
+        
+        <!-- Statistics Cards -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+          <div style="text-align:center;padding:16px;background:#f8fafc;border-radius:8px">
+            <div style="font-size:24px;font-weight:700;color:#059669">${distractionCount}</div>
+            <div style="font-size:14px;color:#6b7280">分心次数</div>
+          </div>
+          <div style="text-align:center;padding:16px;background:#f8fafc;border-radius:8px">
+            <div style="font-size:24px;font-weight:700;color:#2563eb">${windowChangeCount}</div>
+            <div style="font-size:14px;color:#6b7280">窗口切换</div>
+          </div>
+          <div style="text-align:center;padding:16px;background:#f8fafc;border-radius:8px">
+            <div style="font-size:24px;font-weight:700;color:#7c3aed">${focusPercentage}%</div>
+            <div style="font-size:14px;color:#6b7280">专注度</div>
+          </div>
+        </div>
+        
+        <!-- Distraction Timeline -->
+        ${distractionCount > 0 ? `
+          <div>
+            <h4 style="margin:0 0 12px 0;color:#374151">📝 分心记录</h4>
+            ${distractionList}
+          </div>
+        ` : `
+          <div style="text-align:center;padding:20px;background:#f0fdf4;border-radius:8px;color:#166534">
+            <div style="font-size:48px;margin-bottom:8px">🌟</div>
+            <div style="font-weight:600">太棒了！整个session没有检测到分心</div>
+          </div>
+        `}
+        
+        <!-- Motivational Message -->
+        <div style="padding:16px;background:#eff6ff;border-radius:8px;border-left:4px solid #3b82f6">
+          <div style="font-weight:600;color:#1e40af;margin-bottom:4px">💪 继续保持</div>
+          <div style="color:#374151;font-size:14px">
+            ${focusPercentage >= 90 ? '专注度极高！你的工作效率非常出色，继续保持这种状态。' :
+              focusPercentage >= 70 ? '专注度良好！稍微注意一下容易分心的环节，你会做得更好。' :
+              '还有提升空间！试着减少容易分心的应用和网站，专注力会逐步提高。'}
+          </div>
+        </div>
+      </div>
+    `;
+    
+    openModal('Session总结', body, [
+      { label: '查看详细数据', variant: 'secondary', onClick: () => {
+        console.log('📊 Session Data:', sessionData);
+        showIsland('数据已输出到控制台');
+      }},
+      { label: '继续工作', onClick: () => {
+        // Maybe suggest starting another session
+        setTimeout(() => {
+          addBubble('assistant', '准备好开始下一个专注session了吗？让我知道你接下来想做什么！');
+        }, 500);
+      }},
+    ]);
+  }
+
   async function showHistoryModal() {
     try {
       const items = await window.focusAPI?.history?.list?.();
@@ -718,6 +862,13 @@
     sessionStartTime = Date.now();
     timeRemaining = sessionDuration;
     focusStatus = 'green'; // Start with green status
+    
+    // Reset session tracking data
+    sessionData = {
+      distractions: [],
+      windowChanges: [],
+      focusEvents: []
+    };
     
     // Update system-level Dynamic Island
     updateSystemIsland();
@@ -796,9 +947,16 @@
     setTimeout(() => {
       showIsland('🎉 Session Complete! Great work!');
     }, 500);
-    addBubble('assistant', `Excellent work! You've completed your ${sessionLengthMins}-minute focus session. How do you feel about what you accomplished?`);
     
-    // Save to history
+    // Add brief completion message to chat
+    addBubble('assistant', `🎉 专注session完成！你工作了${actualMins}分钟，检测到${sessionData.distractions.length}次分心。正在为你生成详细总结...`);
+    
+    // Show detailed session summary modal
+    setTimeout(() => {
+      showSessionSummary(sessionLengthMins, actualMins);
+    }, 1500);
+    
+    // Save to history with enhanced data
     try {
       const lastUserMessage = chatMessages.filter(m => m.role === 'user').pop();
       window.focusAPI?.history?.add({
@@ -806,9 +964,13 @@
         endedAt: Date.now(),
         subject: lastUserMessage?.content?.slice(0, 100) || 'Focus Session',
         lengthMin: actualMins,
-        reminders: 0,
+        reminders: sessionData.distractions.length,
         breaksUsed: 0,
         privacy: false,
+        // Add session summary data
+        distractionCount: sessionData.distractions.length,
+        windowChangeCount: sessionData.windowChanges.length,
+        focusEventsCount: sessionData.focusEvents.length,
       });
     } catch (e) {}
   }

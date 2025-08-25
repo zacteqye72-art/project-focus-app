@@ -8,6 +8,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "electronmon .",
+    "debug": "OPEN_DEV_TOOLS=true electron .",
+    "debug-dev": "OPEN_DEV_TOOLS=true electronmon .",
     "build": "electron-builder --mac"
   },
   "dependencies": {

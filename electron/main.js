@@ -43,6 +43,9 @@ function showDistractionAlert() {
       fullscreenable: false,
       backgroundColor: '#FFFFFF',
       show: true,
+      // Prevent focusing main window when alert closes
+      parent: null, // Don't set parent to avoid focus transfer
+      modal: false, // Not modal to avoid blocking
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
@@ -52,9 +55,36 @@ function showDistractionAlert() {
     distractionAlertWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     distractionAlertWindow.setAlwaysOnTop(true, 'screen-saver');
     distractionAlertWindow.loadFile(path.join(__dirname, '..', 'src', 'alert.html'));
+    
+    // Handle window close to prevent main window activation
     distractionAlertWindow.on('closed', () => {
       distractionAlertWindow = null;
+      
+      // Prevent main window from gaining focus
+      setTimeout(() => {
+        const mainWindow = BrowserWindow.getAllWindows().find(win => 
+          win !== dynamicIslandWindow && !win.isDestroyed()
+        );
+        if (mainWindow && mainWindow.isFocused()) {
+          // If main window somehow got focus, blur it
+          mainWindow.blur();
+          console.log('🔇 Prevented main window from gaining focus after alert dismissal');
+        }
+      }, 100);
     });
+    
+    // Handle blur events to prevent unwanted focus changes
+    distractionAlertWindow.on('blur', () => {
+      // Keep alert focused when it loses focus unless it's being closed
+      if (distractionAlertWindow && !distractionAlertWindow.isDestroyed()) {
+        setTimeout(() => {
+          if (distractionAlertWindow && !distractionAlertWindow.isDestroyed()) {
+            distractionAlertWindow.focus();
+          }
+        }, 50);
+      }
+    });
+    
   } catch (e) {
     console.warn('⚠️ Failed to show always-on-top alert window:', e?.message || e);
   }
@@ -110,7 +140,8 @@ function createMainWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
 
-  if (!app.isPackaged) {
+  // Only open dev tools if explicitly requested via environment variable
+  if (!app.isPackaged && process.env.OPEN_DEV_TOOLS === 'true') {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
   
@@ -240,6 +271,23 @@ function stopMonitoring() {
 }
 
 app.on('browser-window-created', () => startMonitoring());
+
+// Prevent main window from being activated when alert windows close
+app.on('browser-window-focus', (event, window) => {
+  // Check if this is the main window and if there's an active distraction alert
+  const isMainWindow = window !== dynamicIslandWindow && 
+                      window !== distractionAlertWindow;
+  
+  if (isMainWindow && distractionAlertWindow && !distractionAlertWindow.isDestroyed()) {
+    // If main window tries to focus while alert is open, blur it
+    setTimeout(() => {
+      if (window && !window.isDestroyed()) {
+        window.blur();
+        console.log('🔇 Prevented main window focus while distraction alert is active');
+      }
+    }, 50);
+  }
+});
 app.on('before-quit', () => {
   console.log('🔄 App is quitting, cleaning up...');
   cleanupAllMonitoring();
