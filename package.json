@@ -1,0 +1,35 @@
+{
+  "name": "project-focus-app",
+  "version": "0.1.0",
+  "description": "Project Focus - macOS desktop app (Electron) MVP for focus sessions and reminders.",
+  "main": "electron/main.js",
+  "author": "Project Focus",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electronmon .",
+    "build": "electron-builder --mac"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "electronmon": "^2.0.2"
+  },
+  "build": {
+    "appId": "com.projectfocus.app",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": "dmg"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "package.json"
+    ]
+  }
+}
+
+

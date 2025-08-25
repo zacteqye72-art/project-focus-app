@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Project Focus</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="island" class="island" aria-live="polite" aria-atomic="true">
+      <div class="island-content" id="islandContent">
+        <div class="island-left">
+          <div id="focusIndicator" class="focus-indicator green"></div>
+          <span id="sessionTitle">专注Session进行中</span>
+        </div>
+        <div class="island-center">
+          <div id="timerDisplay" class="timer-display">25:00</div>
+        </div>
+        <div class="island-right">
+          <button id="pauseBtn" class="island-btn">⏸</button>
+          <button id="stopBtn" class="island-btn">⏹</button>
+        </div>
+      </div>
+    </div>
+    <header class="app-header">
+      <h1>Project Focus</h1>
+      <p class="subtitle">Stay focused. Gentle reminders. Simple workflow.</p>
+    </header>
+
+    <!-- Landing view (wireframe-aligned) -->
+    <div id="viewLanding" class="landing">
+      <div class="window">
+        <div class="titlebar">
+          <span class="tl red"></span>
+          <span class="tl yellow"></span>
+          <span class="tl green"></span>
+        </div>
+        <div class="body">
+          <aside class="sidebar">
+            <button id="navCoach" class="nav-btn primary">Attention Coach</button>
+            <button id="navHistory" class="nav-btn">Session History</button>
+            <div class="sidebar-bottom">
+              <button id="settingsBtn" class="settings-icon" title="Settings">⚙️</button>
+            </div>
+          </aside>
+          <section class="content">
+            <button id="startFirstBtn" class="cta">Start Your First Session</button>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- App view (existing panels) -->
+    <main id="viewApp" class="grid" hidden>
+      <section class="panel">
+        <h2>Current Session</h2>
+        <div class="chat" id="chat">
+          <div class="bubble assistant">What would you like to work on today?</div>
+        </div>
+        <div class="input-row">
+          <input id="chatInput" placeholder="Describe what you plan to work on..." />
+          <button id="chatMic" class="icon-btn" title="Voice input">🎤</button>
+          <button id="chatSend" class="btn">Send</button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <small>v0.1.0 • MVP • Electron</small>
+    </footer>
+
+    <!-- Modal for confirmations/recap -->
+    <div id="modalBackdrop" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <h3 id="modalTitle"></h3>
+        <div id="modalBody"></div>
+        <div class="modal-actions" id="modalActions"></div>
+      </div>
+    </div>
+
+    <!-- Settings modal launcher in sidebar bottom -->
+    <script>
+      // Reserve global to open settings from anywhere
+      window.openSettings = () => {
+        const currentProvider = localStorage.getItem('ai_provider') || 'siliconflow';
+        const currentKey = localStorage.getItem('ai_api_key') || '';
+        
+        const body = `
+          <div style="display:grid;gap:12px">
+            <label>AI Provider
+              <select id="prov" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border)">
+                <option value="bailian" ${currentProvider === 'bailian' ? 'selected' : ''}>阿里云百炼 (Qwen)</option>
+                <option value="dashscope" ${currentProvider === 'dashscope' ? 'selected' : ''}>Alibaba DashScope (Qwen)</option>
+                <option value="openrouter" ${currentProvider === 'openrouter' ? 'selected' : ''}>OpenRouter (Many models)</option>
+                <option value="siliconflow" ${currentProvider === 'siliconflow' ? 'selected' : ''}>SiliconFlow (Qwen)</option>
+                <option value="deepseek" ${currentProvider === 'deepseek' ? 'selected' : ''}>DeepSeek</option>
+                <option value="openai" ${currentProvider === 'openai' ? 'selected' : ''}>OpenAI</option>
+              </select>
+            </label>
+            <label>API Key
+              <input id="apikey" value="${currentKey}" placeholder="Paste your API key here" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border)" />
+            </label>
+            <div style="font-size:12px;color:var(--muted)">
+              <p>• <strong>阿里云百炼 (推荐):</strong> 在 <a href="https://bailian.console.aliyun.com" target="_blank">百炼控制台</a> 获取API Key</p>
+              <p>• <strong>DashScope:</strong> Get key at <a href="https://dashscope.aliyun.com" target="_blank">dashscope.aliyun.com</a></p>
+              <p>• <strong>SiliconFlow:</strong> Get key at <a href="https://siliconflow.cn" target="_blank">siliconflow.cn</a> (Free Qwen models)</p>
+              <p>• <strong>OpenRouter:</strong> Get key at <a href="https://openrouter.ai" target="_blank">openrouter.ai</a> (has Qwen models too)</p>
+              <p>• <strong>DeepSeek:</strong> Get key at <a href="https://platform.deepseek.com" target="_blank">platform.deepseek.com</a></p>
+              <p>• <strong>OpenAI:</strong> Get key at <a href="https://platform.openai.com" target="_blank">platform.openai.com</a></p>
+            </div>
+          </div>`;
+        const actions = [
+          { label: 'Save', onClick: () => {
+            const prov = document.getElementById('prov').value;
+            const key = document.getElementById('apikey').value.trim();
+            localStorage.setItem('ai_provider', prov);
+            localStorage.setItem('ai_api_key', key);
+            if (key) {
+              // Show success message
+              const evt = new CustomEvent('show-island', { detail: 'Settings saved!' });
+              window.dispatchEvent(evt);
+            }
+          }},
+          { label: 'Close', variant: 'secondary' },
+        ];
+        const evt = new CustomEvent('open-modal', { detail: { title: 'AI Settings', body, actions } });
+        window.dispatchEvent(evt);
+      };
+    </script>
+
+    <script src="renderer.js"></script>
+  </body>
+  </html>
+

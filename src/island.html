@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dynamic Island</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+        background: transparent;
+        overflow: hidden;
+        -webkit-app-region: drag;
+      }
+      
+      .island {
+        width: 320px;
+        height: 50px;
+        background: rgba(0, 0, 0, 0.88);
+        backdrop-filter: blur(14px) saturate(180%);
+        -webkit-backdrop-filter: blur(14px) saturate(180%);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 25px;
+        padding: 8px 16px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 14px;
+        font-weight: 500;
+        -webkit-app-region: no-drag;
+      }
+      
+      .island-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+      }
+      
+      .island-center {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      
+      .island-right {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      
+      .focus-indicator {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        transition: all 0.3s ease;
+      }
+      
+      .focus-indicator.green {
+        background: #34d399;
+        box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
+      }
+      
+      .focus-indicator.yellow {
+        background: #fbbf24;
+        box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+      }
+      
+      .focus-indicator.red {
+        background: #f87171;
+        box-shadow: 0 0 8px rgba(248, 113, 113, 0.6);
+      }
+      
+      .timer-display {
+        font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+        font-size: 16px;
+        font-weight: 600;
+        color: white;
+        text-align: center;
+        min-width: 60px;
+      }
+      
+      .island-btn {
+        background: rgba(255, 255, 255, 0.2);
+        border: none;
+        color: white;
+        width: 28px;
+        height: 28px;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-size: 12px;
+        -webkit-app-region: no-drag;
+      }
+      
+      .island-btn:hover {
+        background: rgba(255, 255, 255, 0.3);
+        transform: scale(1.05);
+      }
+      
+      .island-btn:active {
+        transform: scale(0.95);
+      }
+      
+      #sessionTitle {
+        font-size: 13px;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.9);
+      }
+      
+      .hidden {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="islandRoot" class="island">
+      <div class="island-left">
+        <div id="focusIndicator" class="focus-indicator green"></div>
+        <span id="sessionTitle">Ready to Focus</span>
+      </div>
+      <div class="island-center">
+        <div id="timerDisplay" class="timer-display">--:--</div>
+      </div>
+      <div class="island-right">
+        <button id="pauseBtn" class="island-btn hidden">⏸</button>
+        <button id="stopBtn" class="island-btn hidden">⏹</button>
+      </div>
+    </div>
+    
+    <script>
+      // Dynamic Island logic
+      let focusSessionActive = false;
+      let timeRemaining = 0;
+      let focusStatus = 'green';
+      
+      const islandRoot = document.getElementById('islandRoot');
+      const focusIndicator = document.getElementById('focusIndicator');
+      const sessionTitle = document.getElementById('sessionTitle');
+      const timerDisplay = document.getElementById('timerDisplay');
+      const pauseBtn = document.getElementById('pauseBtn');
+      const stopBtn = document.getElementById('stopBtn');
+      
+      function formatTime(seconds) {
+        const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
+        const secs = (seconds % 60).toString().padStart(2, '0');
+        return `${mins}:${secs}`;
+      }
+      
+      function updateIsland(data) {
+        console.log('🏝️ Updating island:', data);
+        
+        if (data.active) {
+          focusSessionActive = true;
+          timeRemaining = data.timeRemaining || 0;
+          focusStatus = data.status || 'green';
+          // Update container status class for button accent color
+          islandRoot.classList.remove('status-green', 'status-yellow', 'status-red');
+          islandRoot.classList.add(`status-${focusStatus}`);
+          
+          // Update content
+          sessionTitle.textContent = '专注Session进行中';
+          timerDisplay.textContent = formatTime(timeRemaining);
+          focusIndicator.className = `focus-indicator ${focusStatus}`;
+          
+          // Show buttons
+          pauseBtn.classList.remove('hidden');
+          stopBtn.classList.remove('hidden');
+        } else {
+          focusSessionActive = false;
+          sessionTitle.textContent = data.message || 'Ready to Focus';
+          timerDisplay.textContent = '--:--';
+          focusIndicator.className = 'focus-indicator green';
+          islandRoot.classList.remove('status-green', 'status-yellow', 'status-red');
+          
+          // Hide buttons
+          pauseBtn.classList.add('hidden');
+          stopBtn.classList.add('hidden');
+        }
+      }
+      
+      // Listen for updates from main process
+      if (window.focusAPI) {
+        window.focusAPI.onIslandUpdate((data) => {
+          updateIsland(data);
+        });
+      }
+      
+      // Button handlers
+      pauseBtn.addEventListener('click', () => {
+        window.focusAPI?.islandAction('pause');
+      });
+      
+      stopBtn.addEventListener('click', () => {
+        window.focusAPI?.islandAction('stop');
+      });
+      
+      // Initial state
+      updateIsland({ active: false, message: 'Ready to Focus' });
+    </script>
+    <style>
+      /* Button accent by status */
+      #islandRoot.status-green .island-btn { background: rgba(52, 211, 153, 0.25); }
+      #islandRoot.status-green .island-btn:hover { background: rgba(52, 211, 153, 0.35); }
+      #islandRoot.status-yellow .island-btn { background: rgba(251, 191, 36, 0.25); }
+      #islandRoot.status-yellow .island-btn:hover { background: rgba(251, 191, 36, 0.35); }
+      #islandRoot.status-red .island-btn { background: rgba(248, 113, 113, 0.25); }
+      #islandRoot.status-red .island-btn:hover { background: rgba(248, 113, 113, 0.35); }
+    </style>
+  </body>
+</html>
+

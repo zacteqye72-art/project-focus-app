@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>专注提醒</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif;
+      background: #ffffff;
+      color: #111827;
+    }
+    .card {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      height: 100vh;
+      align-items: center;
+      justify-content: center;
+    }
+    .title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #b91c1c;
+    }
+    .desc {
+      font-size: 14px;
+      color: #374151;
+    }
+    .btn {
+      appearance: none;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 16px;
+      background: #111827;
+      color: #ffffff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn:active { transform: translateY(1px); }
+  </style>
+  <script>
+    window.addEventListener('DOMContentLoaded', () => {
+      const closeBtn = document.getElementById('closeBtn');
+      closeBtn?.addEventListener('click', () => {
+        window.close();
+      });
+    });
+  </script>
+  </head>
+<body>
+  <div class="card">
+    <div class="title">专注提醒</div>
+    <div class="desc">你正在分心，请回归工作。</div>
+    <button id="closeBtn" class="btn">我知道了</button>
+  </div>
+</body>
+</html>
+
+
+
+
