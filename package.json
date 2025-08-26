@@ -10,7 +10,10 @@
     "dev": "electronmon .",
     "debug": "OPEN_DEV_TOOLS=true electron .",
     "debug-dev": "OPEN_DEV_TOOLS=true electronmon .",
-    "build": "electron-builder --mac"
+    "build": "electron-builder --config build/electron-builder.yml",
+    "build:arm64": "electron-builder --config build/electron-builder.yml --arm64",
+    "build:x64": "electron-builder --config build/electron-builder.yml --x64",
+    "build:universal": "electron-builder --config build/electron-builder.yml --universal"
   },
   "dependencies": {
     "electron-store": "^8.2.0"
