@@ -514,7 +514,19 @@
       const cleanResult = result?.toString().trim().toLowerCase() || '';
       console.log('🤖 Cleaned result for matching:', cleanResult);
       
-      if (cleanResult.includes('专注中') || cleanResult.includes('专注') || 
+      if (cleanResult.includes('检测中')) {
+        statusEmoji = '⏳';
+        statusMessage = '检测中';
+        newFocusStatus = 'yellow';
+        isAIOverridingStatus = true;
+        isDistraction = false;
+      } else if (cleanResult.includes('待机中') || cleanResult.includes('idle')) {
+        statusEmoji = '🛌';
+        statusMessage = '待机中';
+        newFocusStatus = 'red';
+        isAIOverridingStatus = true;
+        isDistraction = true;
+      } else if (cleanResult.includes('专注中') || cleanResult.includes('专注') || 
           cleanResult.includes('focused') || cleanResult === '2' || 
           cleanResult.includes('2.') || cleanResult.includes('2、')) {
         statusEmoji = '✅';

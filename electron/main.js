@@ -522,6 +522,10 @@ let lastAnalysisTime = 0;
 let statusHistory = []; // Keep last 3 results for consensus
 const ANALYSIS_COOLDOWN = 2000; // 2 seconds
 const STATUS_CONSENSUS_COUNT = 1; // Immediate update on next analysis
+// Idle and semi-distraction tracking
+let isIdleMode = false; // 是否处于待机中
+let semiStartAt = null; // 半分心开始时间
+let semiEscalated = false; // 是否已从半分心升级为分心中
 
 // Screenshot management
 let currentSessionScreenshots = [];
@@ -779,6 +783,24 @@ function startWindowMonitoring() {
                 "🤖 Starting AI analysis for screenshot:",
                 screenshotPath,
               );
+              // Emit detecting state while waiting for AI response
+              try {
+                const mainWindowForDetect = BrowserWindow.getAllWindows().find(
+                  (win) => win !== dynamicIslandWindow && !win.isDestroyed(),
+                );
+                if (mainWindowForDetect && !mainWindowForDetect.isDestroyed()) {
+                  mainWindowForDetect.webContents.send("focus:analysis", {
+                    result: "检测中",
+                    reason: "AI分析中",
+                    workContext: currentWorkContext,
+                    screenshotPath: screenshotPath,
+                    timestamp: Date.now(),
+                    rawResult: "检测中",
+                    rawReason: "AI分析中",
+                    consensus: 0,
+                  });
+                }
+              } catch (_) {}
               analyzeScreenshotForFocus(screenshotPath);
             } else {
               console.log(
@@ -823,10 +845,67 @@ function startWindowMonitoring() {
   idleCheckInterval = setInterval(async () => {
     try {
       const sinceChangeMs = Date.now() - lastWindowChangeAt;
-      if (sinceChangeMs < 60_000) return; // only after 1 min without window switch
       const idleSec = await getIdleSeconds();
-      console.log("🕑 Idle check:", { sinceChangeMs, idleSec });
-      if (idleSec >= 30) {
+      // Enter idle (待机中): no window switch >= 60s AND idle >= 30s
+      if (sinceChangeMs >= 60_000 && idleSec >= 30) {
+        if (!isIdleMode) {
+          isIdleMode = true;
+          const mainWindow = BrowserWindow.getAllWindows().find(
+            (win) => win !== dynamicIslandWindow && !win.isDestroyed(),
+          );
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            try {
+              showDistractionAlert();
+              mainWindow.webContents.send("focus:analysis", {
+                result: "待机中",
+                reason: "超过1分钟未切换窗口且30秒无输入",
+                workContext: currentWorkContext,
+                screenshotPath: "",
+                timestamp: Date.now(),
+                rawResult: "待机中",
+                rawReason: "空闲输入检测",
+                consensus: 1,
+              });
+            } catch (e) {
+              console.warn(
+                "⚠️ Failed to send idle state event:",
+                e?.message || e,
+              );
+            }
+          }
+        }
+      } else {
+        // Exit idle to focus when input resumes (idle seconds very small)
+        if (isIdleMode && idleSec >= 0 && idleSec <= 3) {
+          isIdleMode = false;
+          const mainWindow = BrowserWindow.getAllWindows().find(
+            (win) => win !== dynamicIslandWindow && !win.isDestroyed(),
+          );
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            try {
+              mainWindow.webContents.send("focus:analysis", {
+                result: "专注中",
+                reason: "检测到键鼠输入，退出待机",
+                workContext: currentWorkContext,
+                screenshotPath: "",
+                timestamp: Date.now(),
+                rawResult: "专注中",
+                rawReason: "输入恢复",
+                consensus: 1,
+              });
+            } catch (e) {
+              console.warn(
+                "⚠️ Failed to send resume focus event:",
+                e?.message || e,
+              );
+            }
+          }
+        }
+      }
+
+      // Escalate 半分心 -> 分心中 after 60s continuous semi-distracted
+      if (semiStartAt && !semiEscalated && Date.now() - semiStartAt >= 60_000) {
+        semiEscalated = true;
         const mainWindow = BrowserWindow.getAllWindows().find(
           (win) => win !== dynamicIslandWindow && !win.isDestroyed(),
         );
@@ -834,18 +913,18 @@ function startWindowMonitoring() {
           try {
             showDistractionAlert();
             mainWindow.webContents.send("focus:analysis", {
-              result: "分心",
-              reason: "超过1分钟未切换窗口，且30秒无键鼠输入",
+              result: "分心中",
+              reason: "半分心持续超过1分钟",
               workContext: currentWorkContext,
               screenshotPath: "",
               timestamp: Date.now(),
-              rawResult: "分心",
-              rawReason: "空闲输入检测",
-              consensus: 1,
+              rawResult: "分心中",
+              rawReason: "半分心升级",
+              consensus: 2,
             });
           } catch (e) {
             console.warn(
-              "⚠️ Failed to send idle distraction event:",
+              "⚠️ Failed to send semi escalation event:",
               e?.message || e,
             );
           }
@@ -854,7 +933,7 @@ function startWindowMonitoring() {
     } catch (e) {
       console.warn("⚠️ Idle check error:", e?.message || e);
     }
-  }, 30_000);
+  }, 1000);
 }
 
 function stopWindowMonitoring() {
@@ -999,6 +1078,18 @@ async function analyzeScreenshotForFocus(screenshotPath) {
         // If distracted, show system-level alert window
         try {
           const statusText = resultToSend.status || "";
+          // Track semi-distracted periods for escalation
+          if (statusText.includes("半分心")) {
+            if (!semiStartAt) {
+              semiStartAt = Date.now();
+              semiEscalated = false;
+            }
+          } else {
+            // Any non-semi status resets the semi tracking
+            semiStartAt = null;
+            semiEscalated = false;
+          }
+
           if (statusText.includes("分心")) {
             // Start/maintain reminder loop
             showDistractionAlert();
@@ -1065,6 +1156,10 @@ Analyze the image and respond with ONLY a JSON object in the following format, w
   "status": "...",
   "reason": "..."
 }
+
+Definition for "专注中" is most of the screen current activity is in line with Work Goal: "${workContext}" 
+Definition for "半分心" is when the user is adjusting computer settings, playing background music, using productivity tools, reading and replying to emails, responding to instant messages, etc.
+Definition for "分心中" is most of the screen current activity deviate from Work Goal: "${workContext}" 
 
 Possible values for the "status" field are ONLY: "专注中", "半分心", "分心中".
 The "reason" field should be a brief explanation (under 50 characters) in Chinese.`;
