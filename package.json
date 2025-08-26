@@ -22,14 +22,39 @@
   },
   "build": {
     "appId": "com.projectfocus.app",
+    "productName": "Project Focus",
+    "electronVersion": "30.5.1",
+    "directories": {
+      "output": "dist"
+    },
     "mac": {
       "category": "public.app-category.productivity",
-      "target": "dmg"
+      "target": "dmg",
+      "darkModeSupport": true,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "Project Focus Installer",
+      "backgroundColor": "#f8f9fa",
+      "window": {
+        "width": 600,
+        "height": 400
+      }
     },
     "files": [
       "electron/**/*",
       "src/**/*",
-      "package.json"
+      "package.json",
+      "config.js",
+      "config.example.js",
+      "node_modules/electron-store/**/*",
+      "!screenshots/**/*"
+    ],
+    "extraFiles": [
+      {
+        "from": "config.example.js",
+        "to": "config.example.js"
+      }
     ]
   }
 }

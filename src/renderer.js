@@ -342,8 +342,14 @@
     }
   }
   
+  let lastIslandUpdate = 0;
   function updateSystemIsland() {
     if (!window.focusAPI?.island) return;
+    
+    // Throttle updates to prevent excessive calls
+    const now = Date.now();
+    if (now - lastIslandUpdate < 500) return; // Max 2 updates per second
+    lastIslandUpdate = now;
     
     if (focusSessionActive) {
       // Update with current session data
@@ -364,24 +370,31 @@
   }
   
   function startWindowMonitoring() {
-    if (!window.focusAPI?.windowMonitoring) return;
+    if (!window.focusAPI?.windowMonitoring) {
+      console.error('❌ Window monitoring API not available');
+      addBubble('assistant', '❌ 窗口监控API不可用');
+      return;
+    }
     
     console.log('👁️ Starting window monitoring...');
     
     // Start monitoring
     window.focusAPI.windowMonitoring.start();
-    
+
     // Listen for window changes
     window.focusAPI.windowMonitoring.onWindowChanged((data) => {
+      console.log('👁️ Window change event received:', data);
       handleWindowChange(data);
     });
     
     // Listen for AI focus analysis results
     window.focusAPI.aiAnalysis.onFocusAnalysis((data) => {
+      console.log('🤖 AI analysis event received:', data);
       handleFocusAnalysis(data);
     });
     
-    console.log('👁️ Window monitoring started');
+    console.log('✅ Window monitoring started and event listeners registered');
+    addBubble('assistant', '✅ 窗口监控已启动，正在监控窗口切换...');
   }
   
   function stopWindowMonitoring() {
@@ -443,6 +456,23 @@
     try {
       console.log('🧪 Testing window monitoring...');
       
+      // Check permissions first
+      if (window.focusAPI?.permissions) {
+        const permissionResult = await window.focusAPI.permissions.check();
+        if (!permissionResult.hasPermission) {
+          let message = '⚠️ 需要以下权限才能进行完整功能：\n';
+          if (permissionResult.missingPermissions.includes('screen')) {
+            message += '• 屏幕录制 - 用于截图分析\n';
+          }
+          if (permissionResult.missingPermissions.includes('accessibility')) {
+            message += '• 辅助功能 - 用于窗口切换监控\n';
+          }
+          message += '\n请在"系统偏好设置 > 安全性与隐私 > 隐私"中启用相应权限。';
+          addBubble('assistant', message);
+          return;
+        }
+      }
+      
       // Test getting current window (silent test)
       const currentResult = await window.focusAPI?.windowMonitoring?.getCurrent();
       if (currentResult?.success) {
@@ -455,9 +485,11 @@
         console.log('✅ Test screenshot saved:', screenshotResult.path);
       } else {
         console.error('❌ Screenshot test failed:', screenshotResult?.error);
+        addBubble('assistant', '❌ 截图测试失败。可能需要在系统偏好设置中授予屏幕录制权限。');
       }
     } catch (error) {
       console.error('❌ Window monitoring test error:', error);
+      addBubble('assistant', `❌ 窗口监控测试错误: ${error.message}`);
     }
   }
   
@@ -677,9 +709,7 @@
       { label: "Let's Get Started", onClick: () => {
         const selected = document.querySelector('.time-option.selected');
         const minutes = selected ? parseInt(selected.dataset.minutes) : 45;
-        sessionDuration = minutes * 60;
-        timeRemaining = sessionDuration;
-        startFocusSession();
+        startFocusSession(minutes);
       }},
       { label: 'Cancel', variant: 'secondary', onClick: () => {} },
     ]);
@@ -846,11 +876,12 @@
     return `${mins}:${secs}`;
   }
 
-  function startFocusSession() {
+  function startFocusSession(durationMinutes = 45) {
     if (focusSessionActive) return;
     
     focusSessionActive = true;
     sessionStartTime = Date.now();
+    sessionDuration = durationMinutes * 60; // Convert to seconds
     timeRemaining = sessionDuration;
     focusStatus = 'green'; // Start with green status
     
@@ -869,6 +900,12 @@
     
     // Start window monitoring
     startWindowMonitoring();
+    
+    // Enable macOS Do Not Disturb
+    if (window.focusAPI?.dnd?.toggle) {
+      console.log('🌙 Requesting to enable Do Not Disturb mode...');
+      window.focusAPI.dnd.toggle(true);
+    }
     
     // Enable AI analysis for focus monitoring
     const lastUserMessage = chatMessages.filter(m => m.role === 'user').pop();
@@ -927,6 +964,12 @@
     // Stop window monitoring
     stopWindowMonitoring();
     
+    // Disable macOS Do Not Disturb
+    if (window.focusAPI?.dnd?.toggle) {
+      console.log('🌙 Requesting to disable Do Not Disturb mode...');
+      window.focusAPI.dnd.toggle(false);
+    }
+    
     const sessionLengthMins = Math.floor(sessionDuration / 60);
     const actualTime = Math.floor((Date.now() - sessionStartTime) / 1000);
     const actualMins = Math.floor(actualTime / 60);
@@ -974,6 +1017,12 @@
     
     // Stop window monitoring
     stopWindowMonitoring();
+    
+    // Disable macOS Do Not Disturb
+    if (window.focusAPI?.dnd?.toggle) {
+      console.log('🌙 Requesting to disable Do Not Disturb mode...');
+      window.focusAPI.dnd.toggle(false);
+    }
     
     // Update system island to ready state
     updateSystemIsland();

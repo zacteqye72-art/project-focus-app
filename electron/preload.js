@@ -35,6 +35,12 @@ contextBridge.exposeInMainWorld('focusAPI', {
     enable: (workContext) => ipcRenderer.send('ai-analysis:enable', { workContext }),
     disable: () => ipcRenderer.send('ai-analysis:disable'),
     onFocusAnalysis: (handler) => ipcRenderer.on('focus:analysis', (_, data) => handler?.(data))
+  },
+  permissions: {
+    check: () => ipcRenderer.invoke('permissions:check')
+  },
+  dnd: {
+    toggle: (enable) => ipcRenderer.send('dnd:toggle', enable)
   }
 });
 
