@@ -24,7 +24,7 @@ try {
   console.log("⚠️ 配置文件不存在，使用空配置:", e.message);
 }
 
-// dynamicIslandWindow 已经用 Swift Island 替代
+let dynamicIslandWindow = null;
 let distractionAlertWindow = null;
 
 // Swift 灵动岛管理器
@@ -179,7 +179,7 @@ function showDistractionAlert() {
       // Prevent main window from gaining focus
       setTimeout(() => {
         const mainWindow = BrowserWindow.getAllWindows().find(
-          (win) => !win.isDestroyed(),
+          (win) => win !== dynamicIslandWindow && !win.isDestroyed(),
         );
         if (mainWindow && mainWindow.isFocused()) {
           // If main window somehow got focus, blur it
@@ -214,29 +214,247 @@ function createDynamicIslandWindow() {
   console.log('🏝️ Starting Swift-based Dynamic Island...');
   swiftIsland.start();
 }
-// Dynamic Island 相关函数（现在使用 Swift 实现）
+    const notchCenter = bounds.width / 2;
+    const notchLeftEdge = notchCenter - estimatedNotchWidth / 2;
+    islandX = Math.max(20, notchLeftEdge - islandWidth - 20); // 距离屏幕边缘至少 20px
+    
+    // 如果左侧空间不足，放到右侧
+    if (islandX < 20) {
+      const notchRightEdge = notchCenter + estimatedNotchWidth / 2;
+      islandX = Math.min(bounds.width - islandWidth - 20, notchRightEdge + 20);
+    }
+  } else {
+    // 没有 notch 的话，正常居中
+    islandX = Math.round(bounds.width / 2 - islandWidth / 2);
+  }
+  
+  dynamicIslandWindow = new BrowserWindow({
+    width: islandWidth,
+    height: islandHeight,
+    x: islandX,
+    // 使用负的菜单栏高度，使窗口进入菜单栏区域实现覆盖
+    y: -Math.max(0, menuBarHeight - 2),
+    alwaysOnTop: true,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    skipTaskbar: true,
+    focusable: true,
+    minimizable: false,
+    maximizable: false,
+    closable: false,
+    fullscreenable: false,
+    movable: false,
+    hasShadow: false,
+    titleBarStyle: 'hidden',
+    vibrancy: 'ultra-dark',
+    visualEffectState: 'active',
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
+    },
+  });
+
+  // 设置最高窗口级别，确保覆盖菜单栏
+  dynamicIslandWindow.setAlwaysOnTop(true, 'screen-saver', 2);
+  
+  // 让窗口在所有工作区和全屏模式下可见
+  dynamicIslandWindow.setVisibleOnAllWorkspaces(true, { 
+    visibleOnFullScreen: true 
+  });
+
+  // 加载 Dynamic Island HTML
+  dynamicIslandWindow.loadFile(
+    path.join(__dirname, "..", "src", "island.html"),
+  );
+
+  // 监听屏幕变化，重新定位岛屿（显示器切换、分辨率变化等）
+  const repositionIsland = () => {
+    if (!dynamicIslandWindow || dynamicIslandWindow.isDestroyed()) return;
+    
+    const newDisplay = screen.getPrimaryDisplay();
+    const newBounds = newDisplay.bounds;
+    const newWorkArea = newDisplay.workArea;
+    
+    const newHasNotch = newWorkArea.y > 25;
+    const newMenuBarHeight = Math.max(0, newWorkArea.y);
+    const newEstimatedNotchWidth = newHasNotch ? 180 : 0;
+    
+    let newIslandX;
+    if (newHasNotch) {
+      const notchCenter = newBounds.width / 2;
+      const notchLeftEdge = notchCenter - newEstimatedNotchWidth / 2;
+      newIslandX = Math.max(20, notchLeftEdge - islandWidth - 20);
+      
+      if (newIslandX < 20) {
+        const notchRightEdge = notchCenter + newEstimatedNotchWidth / 2;
+        newIslandX = Math.min(newBounds.width - islandWidth - 20, notchRightEdge + 20);
+      }
+    } else {
+      newIslandX = Math.round(newBounds.width / 2 - islandWidth / 2);
+    }
+    
+    // 平滑移动到新位置
+    dynamicIslandWindow.setBounds({
+      x: newIslandX,
+      // 负的菜单栏高度，覆盖菜单栏
+      y: -Math.max(0, newMenuBarHeight - 2),
+      width: islandWidth,
+      height: islandHeight
+    }, true);
+    
+    console.log(`🏝️ Island repositioned for display change: x=${newIslandX}, hasNotch=${newHasNotch}`);
+  };
+
+  // 监听显示器变化事件
+  screen.on('display-metrics-changed', repositionIsland);
+  screen.on('display-added', repositionIsland);
+  screen.on('display-removed', repositionIsland);
+
+  // 窗口事件处理
+  dynamicIslandWindow.on('blur', () => {
+    // 失去焦点时不隐藏，保持悬浮状态
+    console.log('🏝️ Dynamic Island lost focus but staying visible');
+  });
+
+  dynamicIslandWindow.on('closed', () => {
+    // 清理事件监听
+    screen.removeListener('display-metrics-changed', repositionIsland);
+    screen.removeListener('display-added', repositionIsland);
+    screen.removeListener('display-removed', repositionIsland);
+    
+    dynamicIslandWindow = null;
+    console.log('🏝️ Dynamic Island window closed');
+  });
+
+  // 开发时显示开发者工具（可选）
+  if (!app.isPackaged && process.env.ISLAND_DEV_TOOLS === "true") {
+    dynamicIslandWindow.webContents.openDevTools({ mode: "detach" });
+  }
+
+  return dynamicIslandWindow;
+}
+
+// Dynamic Island 动画函数
 function animateIslandShow() {
-  swiftIsland.show();
+  if (!dynamicIslandWindow || dynamicIslandWindow.isDestroyed()) return;
+  
+  // 从小圆点扩展到完整大小的动画
+  dynamicIslandWindow.webContents.send("island:animate", {
+    type: "show",
+    duration: 400
+  });
 }
 
 function animateIslandHide() {
   return new Promise((resolve) => {
-    swiftIsland.hide();
+    if (!dynamicIslandWindow || dynamicIslandWindow.isDestroyed()) {
+      resolve();
+      return;
+    }
+    
+    // 收缩到小圆点的动画
+    dynamicIslandWindow.webContents.send("island:animate", {
+      type: "hide",
+      duration: 300
+    });
+    
+    // 等待动画完成
     setTimeout(resolve, 350);
   });
 }
 
 function expandDynamicIsland(data) {
-  swiftIsland.expand(true);
-  swiftIsland.updateStatus(data.status || 'active');
-  swiftIsland.updateMessage(data.message || 'Focus session active');
+  if (!dynamicIslandWindow || dynamicIslandWindow.isDestroyed()) return;
+  
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const bounds = primaryDisplay.bounds;
+  const workArea = primaryDisplay.workArea;
+  
+  // 检测 notch
+  const hasNotch = workArea.y > 25;
+  const estimatedNotchWidth = hasNotch ? 180 : 0;
+  const menuBarHeight = Math.max(0, workArea.y);
+  
+  // 扩展尺寸 - 根据内容调整
+  const expandedWidth = data.expanded ? 400 : 280;
+  const expandedHeight = data.expanded ? 80 : 45;
+  
+  // 重新计算 x 位置，保持避开 notch 的逻辑
+  let newX;
+  if (hasNotch) {
+    const notchCenter = bounds.width / 2;
+    const notchLeftEdge = notchCenter - estimatedNotchWidth / 2;
+    newX = Math.max(20, notchLeftEdge - expandedWidth - 20);
+    
+    // 如果左侧空间不足，放到右侧
+    if (newX < 20) {
+      const notchRightEdge = notchCenter + estimatedNotchWidth / 2;
+      newX = Math.min(bounds.width - expandedWidth - 20, notchRightEdge + 20);
+    }
+  } else {
+    newX = Math.round(bounds.width / 2 - expandedWidth / 2);
+  }
+  
+  // 平滑调整窗口大小和位置
+  dynamicIslandWindow.setBounds({
+    x: newX,
+    // 负的菜单栏高度，覆盖菜单栏
+    y: -Math.max(0, menuBarHeight - 2),
+    width: expandedWidth,
+    height: expandedHeight
+  }, true); // animate = true
+  
+  // 通知内容更新
+  dynamicIslandWindow.webContents.send("island:expand", data);
 }
 
 function collapseDynamicIsland() {
-  swiftIsland.expand(false);
+  if (!dynamicIslandWindow || dynamicIslandWindow.isDestroyed()) return;
+  
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const bounds = primaryDisplay.bounds;
+  const workArea = primaryDisplay.workArea;
+  
+  // 检测 notch
+  const hasNotch = workArea.y > 25;
+  const estimatedNotchWidth = hasNotch ? 180 : 0;
+  const menuBarHeight = Math.max(0, workArea.y);
+  
+  // 收缩到默认尺寸
+  const defaultWidth = 280;
+  const defaultHeight = 45;
+  
+  // 重新计算 x 位置
+  let newX;
+  if (hasNotch) {
+    const notchCenter = bounds.width / 2;
+    const notchLeftEdge = notchCenter - estimatedNotchWidth / 2;
+    newX = Math.max(20, notchLeftEdge - defaultWidth - 20);
+    
+    if (newX < 20) {
+      const notchRightEdge = notchCenter + estimatedNotchWidth / 2;
+      newX = Math.min(bounds.width - defaultWidth - 20, notchRightEdge + 20);
+    }
+  } else {
+    newX = Math.round(bounds.width / 2 - defaultWidth / 2);
+  }
+  
+  // 平滑调整回默认大小
+  dynamicIslandWindow.setBounds({
+    x: newX,
+    // 负的菜单栏高度，覆盖菜单栏
+    y: -Math.max(0, menuBarHeight - 2),
+    width: defaultWidth,
+    height: defaultHeight
+  }, true); // animate = true
+  
+  // 通知内容收缩
+  dynamicIslandWindow.webContents.send("island:collapse");
 }
-
-
 
 function createMainWindow() {
   const mainWindow = new BrowserWindow({
@@ -440,7 +658,7 @@ app.on("browser-window-created", () => startMonitoring());
 app.on("browser-window-focus", (event, window) => {
   // Check if this is the main window and if there's an active distraction alert
   const isMainWindow =
-    window !== distractionAlertWindow;
+    window !== dynamicIslandWindow && window !== distractionAlertWindow;
 
   if (
     isMainWindow &&
@@ -461,7 +679,6 @@ app.on("browser-window-focus", (event, window) => {
 app.on("before-quit", () => {
   console.log("🔄 App is quitting, cleaning up...");
   cleanupAllMonitoring();
-  swiftIsland.stop(); // 停止 Swift Island 进程
 });
 
 // Note: window-all-closed handler is defined earlier in the file
@@ -505,32 +722,46 @@ ipcMain.handle("config:get-default", () => {
 
 // Dynamic Island IPC handlers
 ipcMain.on("island:update", (event, data) => {
-  swiftIsland.updateStatus(data.status);
-  if (data.message) {
-    swiftIsland.updateMessage(data.message);
+  if (dynamicIslandWindow && !dynamicIslandWindow.isDestroyed()) {
+    dynamicIslandWindow.webContents.send("island:update", data);
   }
 });
 
 ipcMain.on("island:show", (event) => {
-  swiftIsland.show();
+  if (dynamicIslandWindow && !dynamicIslandWindow.isDestroyed()) {
+    dynamicIslandWindow.show();
+    // 显示时的动画效果
+    animateIslandShow();
+  }
 });
 
 ipcMain.on("island:hide", (event) => {
-  swiftIsland.hide();
+  if (dynamicIslandWindow && !dynamicIslandWindow.isDestroyed()) {
+    // 先播放隐藏动画，然后隐藏窗口
+    animateIslandHide().then(() => {
+      if (dynamicIslandWindow && !dynamicIslandWindow.isDestroyed()) {
+        dynamicIslandWindow.hide();
+      }
+    });
+  }
 });
 
 ipcMain.on("island:expand", (event, data) => {
-  expandDynamicIsland(data);
+  if (dynamicIslandWindow && !dynamicIslandWindow.isDestroyed()) {
+    expandDynamicIsland(data);
+  }
 });
 
 ipcMain.on("island:collapse", (event) => {
-  collapseDynamicIsland();
+  if (dynamicIslandWindow && !dynamicIslandWindow.isDestroyed()) {
+    collapseDynamicIsland();
+  }
 });
 
 ipcMain.on("island:action", (event, action) => {
   // Send island actions back to main window
   const mainWindow = BrowserWindow.getAllWindows().find(
-    (win) => !win.isDestroyed(),
+    (win) => win !== dynamicIslandWindow && !win.isDestroyed(),
   );
   if (mainWindow && !mainWindow.isDestroyed()) {
     try {
@@ -854,7 +1085,7 @@ function startWindowMonitoring() {
 
           // Send window change event to renderer
           const mainWindow = BrowserWindow.getAllWindows().find(
-            (win) => !win.isDestroyed(),
+            (win) => win !== dynamicIslandWindow && !win.isDestroyed(),
           );
 
           if (mainWindow && !mainWindow.isDestroyed()) {
@@ -890,7 +1121,7 @@ function startWindowMonitoring() {
               // Emit detecting state while waiting for AI response
               try {
                 const mainWindowForDetect = BrowserWindow.getAllWindows().find(
-                  (win) => !win.isDestroyed(),
+                  (win) => win !== dynamicIslandWindow && !win.isDestroyed(),
                 );
                 if (mainWindowForDetect && !mainWindowForDetect.isDestroyed()) {
                   mainWindowForDetect.webContents.send("focus:analysis", {
@@ -955,7 +1186,7 @@ function startWindowMonitoring() {
         if (!isIdleMode) {
           isIdleMode = true;
           const mainWindow = BrowserWindow.getAllWindows().find(
-            (win) => !win.isDestroyed(),
+            (win) => win !== dynamicIslandWindow && !win.isDestroyed(),
           );
           if (mainWindow && !mainWindow.isDestroyed()) {
             try {
@@ -983,7 +1214,7 @@ function startWindowMonitoring() {
         if (isIdleMode && idleSec >= 0 && idleSec <= 3) {
           isIdleMode = false;
           const mainWindow = BrowserWindow.getAllWindows().find(
-            (win) => !win.isDestroyed(),
+            (win) => win !== dynamicIslandWindow && !win.isDestroyed(),
           );
           if (mainWindow && !mainWindow.isDestroyed()) {
             try {
@@ -1011,7 +1242,7 @@ function startWindowMonitoring() {
       if (semiStartAt && !semiEscalated && Date.now() - semiStartAt >= 60_000) {
         semiEscalated = true;
         const mainWindow = BrowserWindow.getAllWindows().find(
-          (win) => !win.isDestroyed(),
+          (win) => win !== dynamicIslandWindow && !win.isDestroyed(),
         );
         if (mainWindow && !mainWindow.isDestroyed()) {
           try {
@@ -1166,7 +1397,7 @@ async function analyzeScreenshotForFocus(screenshotPath) {
 
       // Send result to main window
       const mainWindow = BrowserWindow.getAllWindows().find(
-        (win) => !win.isDestroyed(),
+        (win) => win !== dynamicIslandWindow && !win.isDestroyed(),
       );
 
       if (mainWindow && !mainWindow.isDestroyed()) {

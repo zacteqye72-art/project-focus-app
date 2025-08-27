@@ -359,6 +359,9 @@
         timeRemaining: timeRemaining,
         status: focusStatus
       });
+      
+      // Show the island if it's hidden
+      window.focusAPI.island.show();
     } else {
       // Show ready state
       console.log(`🏝️ Updating Dynamic Island: Ready state`);
@@ -366,6 +369,51 @@
         active: false,
         message: 'Ready to Focus'
       });
+    }
+  }
+  
+  // Enhanced island interaction handlers
+  function showIslandMessage(message, duration = 3000) {
+    if (!window.focusAPI?.island) return;
+    
+    // Temporarily expand island to show message
+    window.focusAPI.island.expand({ 
+      expanded: true, 
+      message: message 
+    });
+    
+    // Auto-collapse after duration
+    setTimeout(() => {
+      if (!focusSessionActive) {
+        window.focusAPI.island.collapse();
+      }
+    }, duration);
+  }
+  
+  // Enhanced focus status updates with island feedback
+  function updateFocusStatusWithIsland(status, reason) {
+    // Update main UI
+    updateFocusStatus(status);
+    
+    // Update island with enhanced info
+    if (focusSessionActive && window.focusAPI?.island) {
+      const statusColor = status.includes('专注') ? 'green' : 
+                         status.includes('半分心') ? 'yellow' : 'red';
+      
+      window.focusAPI.island.update({
+        active: true,
+        timeRemaining: timeRemaining,
+        status: statusColor,
+        message: reason ? `${status}: ${reason}` : status
+      });
+      
+      // Show expanded view for distractions
+      if (status.includes('分心')) {
+        window.focusAPI.island.expand({ 
+          expanded: true,
+          urgent: true 
+        });
+      }
     }
   }
   
@@ -581,13 +629,31 @@
         });
       }
       
-      // Update focus status and Dynamic Island
+      // Update focus status and Dynamic Island with enhanced feedback
       if (newFocusStatus !== focusStatus) {
         console.log(`🚨 Focus status changed: ${focusStatus} → ${newFocusStatus}`);
         focusStatus = newFocusStatus;
         updateSystemIsland();
+        
+        // Show enhanced island feedback for status changes
+        if (isDistraction) {
+          showIslandMessage(`${statusEmoji} ${statusMessage}: ${reason || '保持专注'}`, 4000);
+          // Expand island for distractions
+          if (window.focusAPI?.island) {
+            window.focusAPI.island.expand({ 
+              expanded: true,
+              urgent: newFocusStatus === 'red'
+            });
+          }
+        } else if (statusMessage === '专注中') {
+          showIslandMessage(`${statusEmoji} 专注状态良好`, 2000);
+        }
       } else {
         console.log(`✅ Focus status remains: ${focusStatus} (no change needed)`);
+        // Still update island with reason if available
+        if (reason && focusSessionActive) {
+          updateSystemIsland();
+        }
       }
       
       // Show analysis result in chat with reasoning and consensus info
@@ -1077,6 +1143,39 @@
       wrap.appendChild(label);
       wrap.appendChild(actions);
       showIsland(wrap);
+    });
+  }
+
+  // Handle Dynamic Island actions
+  if (window.focusAPI?.onIslandAction) {
+    window.focusAPI.onIslandAction((action) => {
+      console.log('🏝️ Island action received:', action);
+      
+      switch(action) {
+        case 'pause':
+          if (focusSessionActive) {
+            pauseFocusSession();
+            showIslandMessage('⏸️ Session Paused', 2000);
+          }
+          break;
+          
+        case 'stop':
+          if (focusSessionActive) {
+            completeFocusSession();
+            showIslandMessage('⏹️ Session Stopped', 2000);
+          }
+          break;
+          
+        case 'resume':
+          if (!focusSessionActive && sessionTimer) {
+            resumeFocusSession();
+            showIslandMessage('▶️ Session Resumed', 2000);
+          }
+          break;
+          
+        default:
+          console.log('🏝️ Unknown island action:', action);
+      }
     });
   }
 })();

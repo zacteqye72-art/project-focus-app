@@ -19,10 +19,15 @@ contextBridge.exposeInMainWorld('focusAPI', {
   island: {
     update: (data) => ipcRenderer.send('island:update', data),
     show: () => ipcRenderer.send('island:show'),
-    hide: () => ipcRenderer.send('island:hide')
+    hide: () => ipcRenderer.send('island:hide'),
+    expand: (data) => ipcRenderer.send('island:expand', data),
+    collapse: () => ipcRenderer.send('island:collapse')
   },
   onIslandUpdate: (handler) => ipcRenderer.on('island:update', (_, data) => handler?.(data)),
   onIslandAction: (handler) => ipcRenderer.on('island:action', (_, action) => handler?.(action)),
+  onIslandAnimate: (handler) => ipcRenderer.on('island:animate', (_, data) => handler?.(data)),
+  onIslandExpand: (handler) => ipcRenderer.on('island:expand', (_, data) => handler?.(data)),
+  onIslandCollapse: (handler) => ipcRenderer.on('island:collapse', (_, data) => handler?.(data)),
   islandAction: (action) => ipcRenderer.send('island:action', action),
   windowMonitoring: {
     start: () => ipcRenderer.send('window-monitoring:start'),
