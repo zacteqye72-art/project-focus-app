@@ -12,6 +12,8 @@ const { execFile, exec, spawn } = require("child_process");
 const Store = require("electron-store");
 const https = require("https");
 const fs = require("fs");
+const Tesseract = require("tesseract.js");
+const { Jimp } = require("jimp");
 
 // 尝试加载本地配置文件
 let defaultConfig = {};
@@ -26,6 +28,7 @@ try {
 
 // dynamicIslandWindow 已经用 Swift Island 替代
 let distractionAlertWindow = null;
+let currentDistractionMessage = "Get back to work"; // Default fallback message
 
 // Swift 灵动岛管理器
 class SwiftIslandManager {
@@ -131,9 +134,194 @@ class SwiftIslandManager {
 // 创建全局 Swift Island 管理器实例
 const swiftIsland = new SwiftIslandManager();
 
+// Generate AI distraction message
+async function generateDistractionMessage(base64Image, workContext) {
+  try {
+    console.log("🤖 Generating AI distraction message...");
+    console.log("🤖 Work context:", workContext);
+    console.log("🤖 Has screenshot:", !!base64Image);
+    
+    const provider = defaultConfig?.ai?.provider || "bailian";
+    const apiKey = defaultConfig?.ai?.apiKey || "";
+
+    console.log("🤖 AI provider:", provider);
+    console.log("🤖 Has API key:", !!apiKey);
+
+    if (!apiKey) {
+      console.warn("⚠️ No AI API key available, using default message");
+      return "Get back to work";
+    }
+
+    const prompt = `You are analyzing a user's screen to create a specific distraction alert.
+
+Work Goal: "${workContext}"
+Screen Content: ${base64Image ? 'Image provided showing current screen' : 'No screenshot available'}
+
+ANALYZE THE SCREEN and identify what the user is actually doing. Then create a specific, direct message.
+
+PRIORITY RULES:
+1. If you see social media (Facebook, Twitter, Instagram, TikTok, etc.) → "Stop browsing [app name]"
+2. If you see video content (YouTube, Netflix, etc.) → "Stop watching [content type]"
+3. If you see shopping sites → "Close shopping tabs"
+4. If you see games → "Close the game"
+5. If you see messaging/chat apps → "Focus, close chat apps"
+6. If you see news sites → "Stop reading news"
+7. If unclear but clearly not work → "Get back to ${workContext.split(' ').slice(0,2).join(' ')}"
+
+FORMAT: Keep under 8 words. Be direct and specific. NO generic messages.
+AVOID: "Your attention score is decreasing" - be more direct.
+
+Examples:
+- "Stop watching YouTube videos"
+- "Close Facebook now"
+- "Stop browsing Reddit"
+- "Get back to coding"
+- "Close entertainment sites"
+
+Respond with ONLY the specific action message, no quotes or extra text.`;
+
+    // Use the existing AI infrastructure with timeout
+    console.log("🤖 Calling AI with timeout...");
+    const result = await Promise.race([
+      callAIWithVision(
+        provider,
+        apiKey,
+        {
+          model: "qwen-vl-plus-latest",
+          messages: [
+            {
+              role: "user",
+              content: base64Image ? [
+                { type: "text", text: prompt },
+                {
+                  type: "image_url",
+                  image_url: { url: `data:image/png;base64,${base64Image}` },
+                },
+              ] : [{ type: "text", text: prompt }],
+            },
+          ],
+          max_tokens: 50,
+          temperature: 0.3,
+        },
+        base64Image,
+        prompt,
+      ),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('AI call timeout after 10 seconds')), 10000)
+      )
+    ]);
+    
+    console.log("🤖 AI call completed successfully");
+
+    let message = result?.content?.trim() || "Get back to work";
+    
+    console.log("🤖 Raw AI response:", message);
+    
+    // Clean up the message - remove quotes if present
+    message = message.replace(/^["']|["']$/g, '');
+    
+    console.log("🤖 After quote removal:", message);
+    
+    // Ensure message is not empty and not too generic
+    if (!message || message.length < 3) {
+      message = `Get back to ${workContext.split(' ').slice(0,2).join(' ')}`;
+      console.log("🤖 Using fallback message:", message);
+    }
+    
+    // Truncate if too long (keep under 8 words as per new format)
+    const words = message.split(' ');
+    if (words.length > 8) {
+      message = words.slice(0, 8).join(' ');
+      console.log("🤖 Truncated to 8 words:", message);
+    }
+
+    // Ensure first letter is capitalized
+    message = message.charAt(0).toUpperCase() + message.slice(1);
+
+    console.log("✅ Final generated AI distraction message:", message);
+    return message;
+
+  } catch (error) {
+    console.error("❌ Failed to generate AI distraction message:", error);
+    return "Get back to work";
+  }
+}
+
+// Generate continuation suggestion from last on-task screenshot (module scope)
+async function generateContinuationSuggestion(base64PrevImage, workContext) {
+  const prompt = `The user was working on: ${workContext}.
+They got distracted for a while.
+Here is the unfinished work screenshot provided as an image input.
+
+Task: Suggest what the user can try to continue their work, based on what you see in the screenshot.
+Format: "Your attention score is decreasing, you can try to [specific suggestion]"
+Constraints:
+- Keep the suggestion part short and actionable (<= 8 words after "try to")
+- Be specific about what they can do next based on the visible work
+- Use encouraging language with "try to"
+- Do NOT mention screenshots or analysis
+
+Return the complete formatted message.`;
+
+  try {
+    const provider = defaultConfig?.ai?.provider || "bailian";
+    const apiKey = defaultConfig?.ai?.apiKey || "";
+    if (!apiKey) return "Your attention score is decreasing, you can try to resume where you left off";
+
+    const result = await Promise.race([
+      callAIWithVision(
+        provider,
+        apiKey,
+        {
+          model: "qwen-vl-plus-latest",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt },
+                base64PrevImage
+                  ? { type: "image_url", image_url: { url: `data:image/png;base64,${base64PrevImage}` } }
+                  : { type: "text", text: "No screenshot available" },
+              ],
+            },
+          ],
+          max_tokens: 60,
+          temperature: 0.3,
+        },
+        base64PrevImage,
+        prompt,
+      ),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Continuation timeout")), 10000)),
+    ]);
+
+    let suggestion = (result?.content || "").trim();
+    suggestion = suggestion.replace(/^"|"$/g, "");
+    if (!suggestion) return "Your attention score is decreasing, you can try to pick up the next small step";
+    
+    // If AI didn't include the prefix, add it
+    if (!suggestion.toLowerCase().includes("your attention score is decreasing")) {
+      // Clean up the suggestion and add prefix
+      const words = suggestion.split(" ");
+      if (words.length > 8) suggestion = words.slice(0, 8).join(" ");
+      suggestion = suggestion.charAt(0).toLowerCase() + suggestion.slice(1);
+      suggestion = `Your attention score is decreasing, you can try to ${suggestion}`;
+    }
+    
+    return suggestion;
+  } catch (e) {
+    console.warn("⚠️ Continuation suggestion failed:", e?.message || e);
+    return "Your attention score is decreasing, you can try to pick up the next small step";
+  }
+}
+
 function showDistractionAlert() {
   try {
+    console.log("🚨 Showing distraction alert with message:", currentDistractionMessage);
+    
     if (distractionAlertWindow && !distractionAlertWindow.isDestroyed()) {
+      // Update the message in existing window
+      console.log("🚨 Updating existing alert window with message:", currentDistractionMessage);
+      distractionAlertWindow.webContents.send('update-message', currentDistractionMessage);
       distractionAlertWindow.show();
       distractionAlertWindow.focus();
       return;
@@ -159,6 +347,7 @@ function showDistractionAlert() {
       parent: null, // Don't set parent to avoid focus transfer
       modal: false, // Not modal to avoid blocking
       webPreferences: {
+        preload: path.join(__dirname, "preload.js"),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: false,
@@ -171,6 +360,12 @@ function showDistractionAlert() {
     distractionAlertWindow.loadFile(
       path.join(__dirname, "..", "src", "alert.html"),
     );
+
+    // Send the current message to the new window once it's ready
+    distractionAlertWindow.webContents.once('did-finish-load', () => {
+      console.log("🚨 Alert window loaded, sending message:", currentDistractionMessage);
+      distractionAlertWindow.webContents.send('update-message', currentDistractionMessage);
+    });
 
     // Handle window close to prevent main window activation
     distractionAlertWindow.on("closed", () => {
@@ -634,6 +829,8 @@ let semiEscalated = false; // 是否已从半分心升级为分心中
 // Screenshot management
 let currentSessionScreenshots = [];
 let distractionReminderInterval = null; // every 5s reminder while distracted
+// Track the last screenshot when user was on-task (专注中 or 半分心)
+let lastOnTaskScreenshotPath = null;
 
 // Cleanup screenshots function
 function cleanupScreenshots() {
@@ -817,6 +1014,259 @@ function takeScreenshotToFile(filename) {
   });
 }
 
+// --- Enhanced PII detection and redaction ---
+function detectPIIFromText(text) {
+  try {
+    const patterns = [
+      // === 证件与账户标识 ===
+      // 中国大陆18位身份证号
+      /\b[1-9]\d{5}(18|19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b/g,
+      // US SSN: 123-45-6789 or 123456789
+      /\b\d{3}-?\d{2}-?\d{4}\b/g,
+      // 护照号 (通用格式)
+      /\b[A-Z]{1,2}\d{6,9}\b/g,
+      // 驾照号 (多种格式)
+      /\b[A-Z]\d{7,15}\b/g,
+      // 税号/TIN (US format)
+      /\b\d{2}-?\d{7}\b/g,
+      
+      // 银行账户相关
+      // 银行卡号 (13-19位，包含常见前缀)
+      /\b(4\d{3}|5[1-5]\d{2}|3[47]\d{2}|6(?:011|5\d{2}))[- ]?\d{4}[- ]?\d{4}[- ]?\d{1,7}\b/g,
+      // 通用银行卡号 (13-19位数字)
+      /\b(?:\d[ -]*?){13,19}\b/g,
+      // IBAN (国际银行账户号)
+      /\b[A-Z]{2}\d{2}[A-Z0-9]{4,30}\b/g,
+      // 路由号 (US)
+      /\b\d{9}\b/g,
+      // CVV/CVC (3-4位) - 更宽松的匹配
+      /\b\d{3,4}\b(?=.*(?:cvv|cvc|security|code|验证码))/gi,
+      /(?:cvv|cvc|security|code|验证码)[\s:：]*\d{3,4}/gi,
+      // 信用卡有效期 MM/YY or MM/YYYY
+      /\b(0[1-9]|1[0-2])\/\d{2,4}\b/g,
+      
+      // 联系方式
+      // 手机号 (中国大陆)
+      /\b1[3-9]\d{9}\b/g,
+      // 国际手机号格式
+      /\b\+\d{1,3}[-.\s]?\d{3,4}[-.\s]?\d{3,4}[-.\s]?\d{3,4}\b/g,
+      // 固定电话
+      /\b\d{3,4}[-.\s]?\d{7,8}\b/g,
+      // 邮箱地址
+      /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+      
+      // 地址信息
+      // 精确住址 (包含数字+楼层/房号关键词)
+      /\b\d+.*?(?:号|楼|层|室|栋|单元|门牌)\b/g,
+      // 邮政编码
+      /\b\d{5,6}\b/g,
+      
+      // 日期信息
+      // 出生日期 (完整格式)
+      /\b(19|20)\d{2}[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])\b/g,
+      /\b(0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])[-/.](19|20)\d{2}\b/g,
+      
+      // === 凭证与安全 ===
+      // API 密钥和 Token
+      // OpenAI API keys
+      /\bsk-[A-Za-z0-9]{48,}\b/g,
+      // AWS Access Key
+      /\bAKIA[A-Z0-9]{16}\b/g,
+      // GitHub Personal Access Token (更灵活的长度)
+      /\bghp_[A-Za-z0-9]{30,40}\b/g,
+      /\bgho_[A-Za-z0-9]{30,40}\b/g,
+      /\bghu_[A-Za-z0-9]{30,40}\b/g,
+      /\bghs_[A-Za-z0-9]{30,40}\b/g,
+      /\bghr_[A-Za-z0-9]{30,40}\b/g,
+      // Slack tokens
+      /\bxox[bpoa]-[A-Za-z0-9-]+/g,
+      // JWT tokens (基本格式检测)
+      /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
+      
+      // 密码相关 (在用户名附近的密码)
+      /\b(?:password|passwd|pwd|pass)\s*[:=]\s*[^\s]{6,}\b/gi,
+      // PIN码 - 更宽松的匹配
+      /\b\d{4,8}\b(?=.*(?:pin|密码|验证码))/gi,
+      /(?:pin|密码)[\s:：]*\d{4,8}/gi,
+      
+      // 验证码
+      // 短信验证码/一次性口令 (4-8位数字)
+      /\b\d{4,8}\b(?=.*(?:验证码|code|otp|sms))/gi,
+      
+      // SSH 私钥标识
+      /-----BEGIN.*PRIVATE KEY-----/g,
+      // TLS 私钥标识  
+      /-----BEGIN.*CERTIFICATE-----/g,
+      
+      // 会话相关
+      // Session cookies (长字符串)
+      /\b[A-Za-z0-9+/]{32,}={0,2}\b/g,
+      // CSRF Token
+      /\b[A-Za-z0-9_-]{32,}\b(?=.*(?:csrf|token))/gi,
+n    ];
+    
+    return patterns.some((re) => re.test(text));
+  } catch (_) {
+    return false;
+  }
+}
+
+async function ocrAndMaybeRedactImage(inputPath) {
+  try {
+    console.log("🔍 [REDACT] Starting redaction for:", inputPath);
+    const image = await Jimp.read(inputPath);
+    console.log("🔍 [REDACT] Image loaded, dimensions:", image.width, "x", image.height);
+    
+    const { data } = await Tesseract.recognize(inputPath, "eng", {
+      logger: () => {},
+    });
+
+    const rawText = data?.text || "";
+    const words = data?.words || [];
+    console.log("🔍 [REDACT] OCR completed - Text length:", rawText.length, "Words:", words.length);
+
+    const hasPII = detectPIIFromText(rawText);
+    console.log("🔍 [REDACT] PII detection result:", hasPII ? "FOUND PII" : "NO PII");
+    
+    if (!hasPII) {
+      console.log("🔍 [REDACT] No PII found, returning original");
+      return { redactedPath: null, usedRedaction: false };
+    }
+
+    console.log("🔍 [REDACT] Starting word-by-word redaction...");
+    let redactedCount = 0;
+    
+    // Heuristic: redact lines/words that look like PII by regex again per word
+    for (const w of words) {
+      const t = String(w?.text || "").trim();
+      if (!t) continue;
+      
+      const looksSensitive = detectPIIFromText(t);
+      if (looksSensitive) {
+        console.log("🔍 [REDACT] Found sensitive word:", t, "bbox:", w?.bbox);
+        
+        if (w?.bbox) {
+          const x = Math.max(0, Math.floor(w.bbox.x0));
+          const y = Math.max(0, Math.floor(w.bbox.y0));
+          const wdt = Math.max(1, Math.floor(w.bbox.x1 - w.bbox.x0));
+          const hgt = Math.max(1, Math.floor(w.bbox.y1 - w.bbox.y0));
+          
+          console.log(`🔍 [REDACT] Redacting area: x=${x}, y=${y}, w=${wdt}, h=${hgt}`);
+          
+          // Method 1: Try scan function
+          try {
+            image.scan(x, y, wdt, hgt, function (xx, yy, idx) {
+              // Fill with solid black
+              this.bitmap.data[idx + 0] = 0;
+              this.bitmap.data[idx + 1] = 0;
+              this.bitmap.data[idx + 2] = 0;
+              this.bitmap.data[idx + 3] = 255;
+            });
+            console.log(`🔍 [REDACT] Successfully redacted using scan method`);
+          } catch (scanError) {
+            console.warn(`🔍 [REDACT] Scan method failed, trying setPixelColor:`, scanError.message);
+            
+            // Method 2: Fallback to setPixelColor
+            try {
+              for (let px = x; px < x + wdt; px++) {
+                for (let py = y; py < y + hgt; py++) {
+                  if (px < image.width && py < image.height) {
+                    image.setPixelColor(0x000000FF, px, py); // Black
+                  }
+                }
+              }
+              console.log(`🔍 [REDACT] Successfully redacted using setPixelColor method`);
+            } catch (pixelError) {
+              console.error(`🔍 [REDACT] Both redaction methods failed:`, pixelError.message);
+            }
+          }
+          
+          redactedCount++;
+        } else {
+          console.warn("🔍 [REDACT] Sensitive word found but no bbox:", t);
+          
+          // Fallback: If no bbox, try to redact based on text position heuristics
+          // This is a rough estimation - redact a small area in the center
+          const centerX = Math.floor(image.width / 2);
+          const centerY = Math.floor(image.height / 2);
+          const fallbackWidth = Math.min(200, Math.floor(image.width * 0.3));
+          const fallbackHeight = 30;
+          
+          console.log(`🔍 [REDACT] Using fallback redaction at center: x=${centerX-fallbackWidth/2}, y=${centerY}, w=${fallbackWidth}, h=${fallbackHeight}`);
+          
+          try {
+            for (let px = centerX - fallbackWidth/2; px < centerX + fallbackWidth/2; px++) {
+              for (let py = centerY; py < centerY + fallbackHeight; py++) {
+                if (px >= 0 && px < image.width && py >= 0 && py < image.height) {
+                  image.setPixelColor(0x000000FF, Math.floor(px), Math.floor(py));
+                }
+              }
+            }
+            console.log(`🔍 [REDACT] Applied fallback redaction`);
+            redactedCount++;
+          } catch (fallbackError) {
+            console.error(`🔍 [REDACT] Fallback redaction failed:`, fallbackError.message);
+          }
+        }
+      }
+    }
+
+    console.log(`🔍 [REDACT] Redacted ${redactedCount} sensitive words`);
+    
+    // If we detected PII but couldn't redact any words (bbox issues), apply blanket redaction
+    if (redactedCount === 0) {
+      console.warn("🔍 [REDACT] PII detected but no words were redacted - applying blanket protection");
+      
+      // Apply a semi-transparent black overlay to the entire image
+      const overlayColor = 0x00000080; // Black with 50% transparency
+      for (let x = 0; x < image.width; x++) {
+        for (let y = 0; y < image.height; y++) {
+          const currentColor = image.getPixelColor(x, y);
+          // Blend with black overlay
+          image.setPixelColor(overlayColor, x, y);
+        }
+      }
+      
+      // Add a warning text overlay
+      try {
+        // Create a large black bar in the center
+        const barHeight = 60;
+        const barY = Math.floor((image.height - barHeight) / 2);
+        
+        for (let x = 0; x < image.width; x++) {
+          for (let y = barY; y < barY + barHeight; y++) {
+            image.setPixelColor(0x000000FF, x, y); // Solid black
+          }
+        }
+        
+        console.log("🔍 [REDACT] Applied blanket redaction due to PII detection failure");
+        redactedCount = 1; // Mark as redacted
+      } catch (blanketError) {
+        console.error("🔍 [REDACT] Blanket redaction failed:", blanketError.message);
+      }
+    }
+
+    // Replace the original file with the redacted version
+    await image.write(inputPath);
+    console.log("🔍 [REDACT] Replaced original screenshot with redacted version:", inputPath);
+    
+    // Verify file was updated
+    if (fs.existsSync(inputPath)) {
+      const stats = fs.statSync(inputPath);
+      console.log("🔍 [REDACT] Verification: redacted file saved, size:", stats.size, "bytes");
+    } else {
+      console.error("🔍 [REDACT] ERROR: Redacted file was not saved!");
+    }
+    
+    // Return the original path since we replaced the file in place
+    return { redactedPath: inputPath, usedRedaction: true, redactedCount };
+  } catch (e) {
+    console.error("🔍 [REDACT] Redaction failed:", e?.message || e);
+    console.error("🔍 [REDACT] Stack trace:", e?.stack);
+    return { redactedPath: null, usedRedaction: false };
+  }
+}
+
 function startWindowMonitoring() {
   console.log("👁️ Starting window monitoring...");
   console.log("👁️ Current monitoring state:", {
@@ -873,7 +1323,7 @@ function startWindowMonitoring() {
             }
           }
 
-          // If AI analysis is enabled, analyze the screenshot with cooldown
+          // If AI analysis is enabled, redact PII if needed, then analyze with cooldown
           console.log("🤖 Checking AI analysis conditions:", {
             aiAnalysisEnabled,
             currentWorkContext,
@@ -887,6 +1337,25 @@ function startWindowMonitoring() {
                 "🤖 Starting AI analysis for screenshot:",
                 screenshotPath,
               );
+              // Run OCR + PII redaction
+              console.log("🔍 [AI] Starting redaction check for:", screenshotPath);
+              try {
+                const { redactedPath, usedRedaction, redactedCount } = await ocrAndMaybeRedactImage(
+                  screenshotPath,
+                );
+                if (usedRedaction) {
+                  console.log(`🔍 [AI] Screenshot redacted in place (${redactedCount} items redacted)`);
+                } else {
+                  console.log("🔍 [AI] No PII found, using original screenshot");
+                }
+                // Always use the screenshotPath since redaction is done in place
+              } catch (e) {
+                console.error(
+                  "🔍 [AI] OCR/Redaction failed, using original screenshot:",
+                  e?.message || e,
+                );
+              }
+              const pathForAI = screenshotPath;
               // Emit detecting state while waiting for AI response
               try {
                 const mainWindowForDetect = BrowserWindow.getAllWindows().find(
@@ -897,7 +1366,7 @@ function startWindowMonitoring() {
                     result: "检测中",
                     reason: "AI分析中",
                     workContext: currentWorkContext,
-                    screenshotPath: screenshotPath,
+                    screenshotPath: screenshotPath, // Always use original path since redaction is in place
                     timestamp: Date.now(),
                     rawResult: "检测中",
                     rawReason: "AI分析中",
@@ -905,7 +1374,7 @@ function startWindowMonitoring() {
                   });
                 }
               } catch (_) {}
-              analyzeScreenshotForFocus(screenshotPath);
+              analyzeScreenshotForFocus(pathForAI);
             } else {
               console.log(
                 `⏳ Analysis cooldown active, skipping (${Math.round((ANALYSIS_COOLDOWN - (now - lastAnalysisTime)) / 1000)}s remaining)`,
@@ -959,7 +1428,27 @@ function startWindowMonitoring() {
           );
           if (mainWindow && !mainWindow.isDestroyed()) {
             try {
-              showDistractionAlert();
+              // Prefer continuation suggestion on idle
+              (async () => {
+                try {
+                  if (lastOnTaskScreenshotPath && fs.existsSync(lastOnTaskScreenshotPath)) {
+                    const prevBuf = fs.readFileSync(lastOnTaskScreenshotPath);
+                    const prevB64 = prevBuf.toString("base64");
+                    const suggestion = await generateContinuationSuggestion(prevB64, currentWorkContext);
+                    currentDistractionMessage = suggestion;
+                    showDistractionAlert();
+                  } else {
+                    const aiMessage = await generateDistractionMessage(null, currentWorkContext);
+                    currentDistractionMessage = aiMessage;
+                    showDistractionAlert();
+                  }
+                } catch (e) {
+                  console.error("❌ Idle continuation failed, using default:", e);
+                  currentDistractionMessage = "Stop being idle, get back to work";
+                  showDistractionAlert();
+                }
+              })();
+              
               mainWindow.webContents.send("focus:analysis", {
                 result: "待机中",
                 reason: "超过1分钟未切换窗口且30秒无输入",
@@ -1015,7 +1504,27 @@ function startWindowMonitoring() {
         );
         if (mainWindow && !mainWindow.isDestroyed()) {
           try {
-            showDistractionAlert();
+            // Prefer continuation on escalation
+            (async () => {
+              try {
+                if (lastOnTaskScreenshotPath && fs.existsSync(lastOnTaskScreenshotPath)) {
+                  const prevBuf = fs.readFileSync(lastOnTaskScreenshotPath);
+                  const prevB64 = prevBuf.toString("base64");
+                  const suggestion = await generateContinuationSuggestion(prevB64, currentWorkContext);
+                  currentDistractionMessage = suggestion;
+                  showDistractionAlert();
+                } else {
+                  const aiMessage = await generateDistractionMessage(null, currentWorkContext);
+                  currentDistractionMessage = aiMessage;
+                  showDistractionAlert();
+                }
+              } catch (e) {
+                console.error("❌ Escalation continuation failed, using default:", e);
+                currentDistractionMessage = "Focus needed, get back to work";
+                showDistractionAlert();
+              }
+            })();
+            
             mainWindow.webContents.send("focus:analysis", {
               result: "分心中",
               reason: "半分心持续超过1分钟",
@@ -1188,6 +1697,12 @@ async function analyzeScreenshotForFocus(screenshotPath) {
               semiStartAt = Date.now();
               semiEscalated = false;
             }
+            // Save last on-task screenshot when semi-focus
+            try {
+              if (screenshotPath && fs.existsSync(screenshotPath)) {
+                lastOnTaskScreenshotPath = screenshotPath;
+              }
+            } catch (_) {}
           } else {
             // Any non-semi status resets the semi tracking
             semiStartAt = null;
@@ -1195,15 +1710,57 @@ async function analyzeScreenshotForFocus(screenshotPath) {
           }
 
           if (statusText.includes("分心")) {
-            // Start/maintain reminder loop
-            showDistractionAlert();
+            // Prefer a continuation suggestion based on last on-task screenshot
+            (async () => {
+              try {
+                if (lastOnTaskScreenshotPath && fs.existsSync(lastOnTaskScreenshotPath)) {
+                  const prevBuf = fs.readFileSync(lastOnTaskScreenshotPath);
+                  const prevB64 = prevBuf.toString("base64");
+                  const suggestion = await generateContinuationSuggestion(prevB64, currentWorkContext);
+                  currentDistractionMessage = suggestion;
+                  showDistractionAlert();
+                } else {
+                  // Fallback to current distraction message based on current screen
+                  const imageBuffer = fs.existsSync(screenshotPath) ? fs.readFileSync(screenshotPath) : null;
+                  const base64Image = imageBuffer ? imageBuffer.toString("base64") : null;
+                  const aiMessage = await generateDistractionMessage(base64Image, currentWorkContext);
+                  currentDistractionMessage = aiMessage;
+                  showDistractionAlert();
+                }
+              } catch (error) {
+                console.error("❌ Failed to generate continuation/distraction message, using default:", error);
+                currentDistractionMessage = "Get back to work";
+                showDistractionAlert();
+              }
+            })();
+            
             if (!distractionReminderInterval) {
               distractionReminderInterval = setInterval(() => {
                 try {
-                  showDistractionAlert();
+                  (async () => {
+                    try {
+                      if (lastOnTaskScreenshotPath && fs.existsSync(lastOnTaskScreenshotPath)) {
+                        const prevBuf = fs.readFileSync(lastOnTaskScreenshotPath);
+                        const prevB64 = prevBuf.toString("base64");
+                        const suggestion = await generateContinuationSuggestion(prevB64, currentWorkContext);
+                        currentDistractionMessage = suggestion;
+                        showDistractionAlert();
+                      } else {
+                        const imageBuffer = fs.existsSync(screenshotPath) ? fs.readFileSync(screenshotPath) : null;
+                        const base64Image = imageBuffer ? imageBuffer.toString("base64") : null;
+                        const aiMessage = await generateDistractionMessage(base64Image, currentWorkContext);
+                        currentDistractionMessage = aiMessage;
+                        showDistractionAlert();
+                      }
+                    } catch (error) {
+                      console.error("❌ Reminder generation failed, using default:", error);
+                      currentDistractionMessage = "Get back to work";
+                      showDistractionAlert();
+                    }
+                  })();
                 } catch (_) {}
               }, 5000);
-              console.log("🔔 Started periodic distraction reminders");
+              console.log("🔔 Started periodic distraction reminders with AI messages");
             }
           } else {
             // Focus or semi-distracted → stop reminders
@@ -1212,6 +1769,12 @@ async function analyzeScreenshotForFocus(screenshotPath) {
               distractionReminderInterval = null;
               console.log("🔕 Stopped periodic distraction reminders");
             }
+            // Save last on-task screenshot when focus
+            try {
+              if (screenshotPath && fs.existsSync(screenshotPath)) {
+                lastOnTaskScreenshotPath = screenshotPath;
+              }
+            } catch (_) {}
           }
         } catch (e) {
           console.warn(
@@ -1252,40 +1815,97 @@ async function analyzeScreenshotWithAI(
   provider,
   apiKey,
 ) {
-  const analysisPrompt = `You are an expert focus analyst. Analyze the user's screenshot to determine their focus state based on their stated work goal.
-Work Goal: "${workContext}"
+  const analysisPrompt = `分析用户的专注状态。
 
-Analyze the image and respond with ONLY a JSON object in the following format, with no other text or explanations before or after the JSON block.
+工作目标: "${workContext}"
+
+请根据截图内容判断用户的专注状态，只返回JSON格式：
 {
-  "status": "...",
-  "reason": "..."
+  "status": "状态",
+  "reason": "原因"
 }
 
-Definition for "专注中" is most of the screen current activity is in line with Work Goal: "${workContext}" 
-Definition for "半分心" is when the user is adjusting computer settings, playing background music, using productivity tools, reading and replying to emails, responding to instant messages, etc.
-Definition for "分心中" is most of the screen current activity deviate from Work Goal: "${workContext}" 
+状态只能是以下三个之一：
+- "专注中": 屏幕内容与工作目标直接相关
+- "半分心": 在做辅助性工作（设置、音乐、简单沟通等）
+- "分心中": 屏幕内容与工作目标无关（社交媒体、视频、购物、游戏等）
 
-Possible values for the "status" field are ONLY: "专注中", "半分心", "分心中".
-The "reason" field should be a brief explanation (under 50 characters) in Chinese.`;
+只返回JSON，不要其他解释。`;
+
+// Generate continuation suggestion from last on-task screenshot
+async function generateContinuationSuggestion(base64PrevImage, workContext) {
+  const prompt = `The user was working on: ${workContext}.
+They got distracted for a while.
+Here is the unfinished work screenshot provided as an image input.
+Task: Based on what you see in the screenshot, generate a short, actionable suggestion that nudges the user to continue their work.
+Do not give advice about what they should do. Instead, act as if you are the user and directly continue their work by adding a concrete next step.
+Write only the next small piece (one sentence, one bullet, or a few lines of code).
+Format: "Your attention score is decreasing, you can try to add [a specific concrete next element, data, or example relevant to the work, e.g. 'an APAC vs EMEA margin comparison' or 'a patient outcome under Personalized treatment']"
+Constraints:
+- Keep the suggestion short and actionable (<= 15 words after "try to")
+- Be specific about what to add next based on the visible work (e.g., concrete data, example, or item)
+- Use encouraging language like "try to add"
+- Do NOT mention screenshots or analysis`;
+
+  try {
+    const provider = defaultConfig?.ai?.provider || "bailian";
+    const apiKey = defaultConfig?.ai?.apiKey || "";
+    if (!apiKey) return "Your attention score is decreasing, you can try to resume where you left off";
+
+    const result = await Promise.race([
+      callAIWithVision(
+        provider,
+        apiKey,
+        {
+          model: "qwen-vl-plus-latest",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt },
+                base64PrevImage
+                  ? { type: "image_url", image_url: { url: `data:image/png;base64,${base64PrevImage}` } }
+                  : { type: "text", text: "No screenshot available" },
+              ],
+            },
+          ],
+          max_tokens: 60,
+          temperature: 0.3,
+        },
+        base64PrevImage,
+        prompt,
+      ),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Continuation timeout")), 10000)),
+    ]);
+
+    let suggestion = (result?.content || "").trim();
+    suggestion = suggestion.replace(/^"|"$/g, "");
+    if (!suggestion) return "Pick up the next small step";
+    const words = suggestion.split(" ");
+    if (words.length > 12) suggestion = words.slice(0, 12).join(" ");
+    suggestion = suggestion.charAt(0).toUpperCase() + suggestion.slice(1);
+    return suggestion;
+  } catch (e) {
+    console.warn("⚠️ Continuation suggestion failed:", e?.message || e);
+    return "Pick up the next small step";
+  }
+}
 
   try {
     // For vision analysis, we need to use a vision-capable model
     const visionPayload = {
-      model: "qwen-vl-plus-latest", // Use Qwen VL Plus latest for vision analysis
+      model: "qwen-vl-plus-latest",
       messages: [
         {
           role: "user",
           content: [
             { type: "text", text: analysisPrompt },
-            {
-              type: "image_url",
-              image_url: { url: `data:image/png;base64,${base64Image}` },
-            },
+            { type: "image_url", image_url: { url: `data:image/png;base64,${base64Image}` } },
           ],
         },
       ],
-      max_tokens: 80, // Reduced for faster response
-      temperature: 0.0, // Set to 0 for fastest, most deterministic response
+      max_tokens: 80,
+      temperature: 0.1,
     };
 
     console.log("🔗 Calling AI with provider:", provider);
@@ -1300,13 +1920,21 @@ The "reason" field should be a brief explanation (under 50 characters) in Chines
     );
     console.log("🔗 Raw AI result:", JSON.stringify(result, null, 2));
 
-    const response = result?.content?.trim() || "UNCLEAR";
+    const response = result?.content?.trim() || "{}";
 
     console.log("🔍 AI Vision Analysis Raw Response:", response);
 
     // Parse the structured response
     const parsed = parseAIResponse(response);
-    return parsed;
+    if (parsed && parsed.status && ["专注中","半分心","分心中"].includes(parsed.status)) {
+      return parsed;
+    }
+    // Fallback: heuristic from text if JSON failed
+    const lower = response.toLowerCase();
+    if (lower.includes("分心")) return { status: "分心中", reason: "与目标无关的内容" };
+    if (lower.includes("半分心")) return { status: "半分心", reason: "辅助性操作" };
+    if (lower.includes("专注")) return { status: "专注中", reason: "与目标一致" };
+    return { status: "半分心", reason: "无法严格解析，保守判断" };
   } catch (error) {
     console.error("❌ AI analysis failed with error:", error);
     console.error("❌ Error stack:", error.stack);
@@ -1408,8 +2036,7 @@ async function callAIWithVision(
   analysisPrompt,
 ) {
   // Always use qwen-vl-max for all vision analysis, regardless of provider
-  const url =
-    "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+  const url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
   const headers = {
     "content-type": "application/json",
     authorization: `Bearer ${apiKey}`,
@@ -1533,6 +2160,41 @@ function postJsonCustom(url, headers, payload) {
     }
   });
 }
+
+// Test function for AI distraction messages
+ipcMain.handle("ai:test-distraction-message", async (evt, { workContext, base64Image }) => {
+  try {
+    console.log("🧪 Testing AI distraction message generation");
+    const message = await generateDistractionMessage(base64Image, workContext);
+    return { success: true, message };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Manual trigger for testing distraction alerts
+ipcMain.on("test:show-distraction-alert", (evt, message) => {
+  if (message) {
+    currentDistractionMessage = message;
+  }
+  console.log("🧪 Manually triggering distraction alert with message:", currentDistractionMessage);
+  showDistractionAlert();
+});
+
+// Manual test: generate continuation message from last on-task screenshot
+ipcMain.handle("ai:test-continuation", async (evt, { workContext }) => {
+  try {
+    if (!lastOnTaskScreenshotPath || !fs.existsSync(lastOnTaskScreenshotPath)) {
+      return { success: false, error: "No last on-task screenshot available" };
+    }
+    const prevBuf = fs.readFileSync(lastOnTaskScreenshotPath);
+    const prevB64 = prevBuf.toString("base64");
+    const suggestion = await generateContinuationSuggestion(prevB64, workContext || currentWorkContext);
+    return { success: true, message: suggestion };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e) };
+  }
+});
 
 ipcMain.handle("ai:chat", async (evt, { messages, provider, apiKey }) => {
   try {

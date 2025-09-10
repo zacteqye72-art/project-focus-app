@@ -45,6 +45,8 @@
   <script>
     window.addEventListener('DOMContentLoaded', () => {
       const closeBtn = document.getElementById('closeBtn');
+      const descElement = document.getElementById('alertDesc');
+      
       closeBtn?.addEventListener('click', () => {
         // Close the alert window without transferring focus
         window.close();
@@ -58,6 +60,21 @@
         }
       });
       
+      // Listen for message updates from main process
+      if (window.focusAPI?.onMessageUpdate) {
+        window.focusAPI.onMessageUpdate((message) => {
+          console.log("🚨 Alert window received message:", message);
+          if (descElement) {
+            console.log("🚨 Updating alert text to:", message);
+            descElement.textContent = message;
+          } else {
+            console.error("🚨 Alert desc element not found!");
+          }
+        });
+      } else {
+        console.error("🚨 focusAPI.onMessageUpdate not available!");
+      }
+      
       // Auto-focus the close button for keyboard accessibility
       setTimeout(() => {
         closeBtn?.focus();
@@ -67,9 +84,9 @@
   </head>
 <body>
   <div class="card">
-    <div class="title">专注提醒</div>
-    <div class="desc">你正在分心，请回归工作。</div>
-    <button id="closeBtn" class="btn">我知道了</button>
+    <div class="title">Focus Alert</div>
+    <div id="alertDesc" class="desc">Get back to work</div>
+    <button id="closeBtn" class="btn">Got it</button>
   </div>
 </body>
 </html>

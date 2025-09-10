@@ -11,7 +11,9 @@ contextBridge.exposeInMainWorld('focusAPI', {
     clear: () => ipcRenderer.invoke('history:clear'),
   },
   ai: {
-    chat: (messages, provider, apiKey) => ipcRenderer.invoke('ai:chat', { messages, provider, apiKey })
+    chat: (messages, provider, apiKey) => ipcRenderer.invoke('ai:chat', { messages, provider, apiKey }),
+    testDistractionMessage: (workContext, base64Image) => ipcRenderer.invoke('ai:test-distraction-message', { workContext, base64Image }),
+    testContinuation: (workContext) => ipcRenderer.invoke('ai:test-continuation', { workContext })
   },
   config: {
     getDefault: () => ipcRenderer.invoke('config:get-default')
@@ -41,11 +43,15 @@ contextBridge.exposeInMainWorld('focusAPI', {
     disable: () => ipcRenderer.send('ai-analysis:disable'),
     onFocusAnalysis: (handler) => ipcRenderer.on('focus:analysis', (_, data) => handler?.(data))
   },
+  onMessageUpdate: (handler) => ipcRenderer.on('update-message', (_, message) => handler?.(message)),
+  dnd: {
+    toggle: (enable) => ipcRenderer.send('dnd:toggle', enable)
+  },
   permissions: {
     check: () => ipcRenderer.invoke('permissions:check')
   },
-  dnd: {
-    toggle: (enable) => ipcRenderer.send('dnd:toggle', enable)
+  test: {
+    showDistractionAlert: (message) => ipcRenderer.send('test:show-distraction-alert', message)
   }
 });
 
