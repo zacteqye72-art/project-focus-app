@@ -15,6 +15,11 @@ contextBridge.exposeInMainWorld('focusAPI', {
     testDistractionMessage: (workContext, base64Image) => ipcRenderer.invoke('ai:test-distraction-message', { workContext, base64Image }),
     testContinuation: (workContext) => ipcRenderer.invoke('ai:test-continuation', { workContext })
   },
+  nudge: {
+    test: (workContext) => ipcRenderer.invoke('nudge:test', { workContext }),
+    stats: () => ipcRenderer.invoke('nudge:stats'),
+    sample: () => ipcRenderer.invoke('nudge:sample')
+  },
   config: {
     getDefault: () => ipcRenderer.invoke('config:get-default')
   },

@@ -10,6 +10,8 @@
     "dev": "electronmon .",
     "debug": "OPEN_DEV_TOOLS=true electron .",
     "debug-dev": "OPEN_DEV_TOOLS=true electronmon .",
+    "test": "jest",
+    "test:watch": "jest --watch",
     "build": "electron-builder --config build/electron-builder.yml",
     "build:arm64": "electron-builder --config build/electron-builder.yml --arm64",
     "build:x64": "electron-builder --config build/electron-builder.yml --x64",
@@ -23,7 +25,8 @@
   "devDependencies": {
     "electron": "^30.0.0",
     "electron-builder": "^24.13.3",
-    "electronmon": "^2.0.2"
+    "electronmon": "^2.0.2",
+    "jest": "^29.7.0"
   },
   "build": {
     "appId": "com.projectfocus.app",

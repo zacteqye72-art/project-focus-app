@@ -9,11 +9,18 @@ const {
 } = require("electron");
 const path = require("path");
 const { execFile, exec, spawn } = require("child_process");
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 const Store = require("electron-store");
 const https = require("https");
 const fs = require("fs");
 const Tesseract = require("tesseract.js");
 const { Jimp } = require("jimp");
+
+// Import new nudge system modules
+const ContextSampler = require("../src/focus/ContextSampler");
+const EntityCache = require("../src/focus/EntityCache");
+const NudgeGenerator = require("../src/focus/NudgeGenerator");
 
 // 尝试加载本地配置文件
 let defaultConfig = {};
@@ -832,6 +839,13 @@ let distractionReminderInterval = null; // every 5s reminder while distracted
 // Track the last screenshot when user was on-task (专注中 or 半分心)
 let lastOnTaskScreenshotPath = null;
 
+// Nudge system instances
+let contextSampler = null;
+let entityCache = null;
+let nudgeGenerator = null;
+let lastNudgeTime = 0;
+let isInDistractionWindow = false;
+
 // Cleanup screenshots function
 function cleanupScreenshots() {
   console.log("🧹 Cleaning up screenshots from current session...");
@@ -1585,6 +1599,10 @@ function cleanupAllMonitoring() {
 function enableAIAnalysis(workContext) {
   currentWorkContext = workContext;
   aiAnalysisEnabled = true;
+  
+  // Initialize nudge system
+  initializeNudgeSystem(workContext);
+  
   console.log("🤖 AI analysis enabled for work context:", workContext);
   console.log("🤖 AI analysis status:", {
     aiAnalysisEnabled,
@@ -1592,14 +1610,255 @@ function enableAIAnalysis(workContext) {
   });
 }
 
+// Initialize the nudge system
+function initializeNudgeSystem(workContext) {
+  try {
+    // Initialize components
+    contextSampler = new ContextSampler();
+    entityCache = new EntityCache();
+    
+    // Create AI caller function for nudge generator
+    const aiCaller = async (messages) => {
+      const provider = defaultConfig?.ai?.provider || "bailian";
+      const apiKey = defaultConfig?.ai?.apiKey || "";
+      
+      if (!apiKey) {
+        throw new Error("No AI API key available");
+      }
+      
+      return await callAIForNudge(messages, provider, apiKey);
+    };
+    
+    nudgeGenerator = new NudgeGenerator(aiCaller);
+    
+    // Start context sampling
+    contextSampler.start();
+    
+    // Setup milestone event detection
+    setupMilestoneDetection();
+    
+    console.log("🎯 Nudge system initialized");
+  } catch (error) {
+    console.error("❌ Failed to initialize nudge system:", error);
+  }
+}
+
+// Setup milestone event detection
+function setupMilestoneDetection() {
+  try {
+    // Use globalShortcut to detect key combinations
+    const { globalShortcut } = require('electron');
+    
+    // Register shortcuts for milestone events
+    const shortcuts = [
+      { key: 'CommandOrControl+S', event: 'save' },
+      { key: 'CommandOrControl+R', event: 'run' },
+      { key: 'CommandOrControl+T', event: 'test' },
+      { key: 'F5', event: 'run' },
+      { key: 'CommandOrControl+Shift+T', event: 'test' }
+    ];
+    
+    shortcuts.forEach(({ key, event }) => {
+      try {
+        globalShortcut.register(key, () => {
+          handleMilestoneEvent(event);
+        });
+      } catch (error) {
+        // Some shortcuts might conflict, ignore errors
+        console.warn(`⚠️ Could not register shortcut ${key}:`, error.message);
+      }
+    });
+    
+    // Setup periodic tab change detection via AppleScript
+    setInterval(async () => {
+      try {
+        await detectBrowserTabChanges();
+      } catch (error) {
+        // Ignore errors in background detection
+      }
+    }, 5000); // Check every 5 seconds
+    
+    console.log('🎯 Milestone detection setup complete');
+  } catch (error) {
+    console.warn('⚠️ Milestone detection setup failed:', error.message);
+  }
+}
+
+// Handle milestone events
+async function handleMilestoneEvent(eventType) {
+  if (!contextSampler || !entityCache) return;
+  
+  try {
+    console.log(`🎯 Milestone event detected: ${eventType}`);
+    const sample = await contextSampler.onMilestoneEvent(eventType);
+    if (sample) {
+      entityCache.addSample(sample);
+    }
+  } catch (error) {
+    console.warn(`⚠️ Failed to handle milestone event ${eventType}:`, error.message);
+  }
+}
+
+// Detect browser tab changes
+let lastBrowserUrl = '';
+async function detectBrowserTabChanges() {
+  try {
+    const script = `
+      try {
+        tell application "Google Chrome"
+          if (count of windows) > 0 then
+            set activeTab to active tab of front window
+            return URL of activeTab
+          end if
+        end tell
+      on error
+        try {
+          tell application "Safari"
+            if (count of windows) > 0 then
+              set activeTab to current tab of front window
+              return URL of activeTab
+            end if
+          end tell
+        on error
+          return ""
+        end try
+      end try
+    `;
+
+    const { stdout } = await execAsync(`osascript -e '${script}'`);
+    const currentUrl = stdout.trim();
+    
+    if (currentUrl && currentUrl !== lastBrowserUrl && currentUrl !== 'missing value') {
+      lastBrowserUrl = currentUrl;
+      await handleMilestoneEvent('tab_switch');
+    }
+  } catch (error) {
+    // Ignore errors in background detection
+  }
+}
+
 function disableAIAnalysis() {
   aiAnalysisEnabled = false;
   currentWorkContext = "";
+  
+  // Clean up nudge system
+  if (contextSampler) {
+    contextSampler.stop();
+    contextSampler = null;
+  }
+  if (entityCache) {
+    entityCache.clear();
+    entityCache = null;
+  }
+  if (nudgeGenerator) {
+    nudgeGenerator.resetSession();
+    nudgeGenerator = null;
+  }
+  
+  // Clean up global shortcuts
+  try {
+    const { globalShortcut } = require('electron');
+    globalShortcut.unregisterAll();
+    console.log('🧹 Global shortcuts cleaned up');
+  } catch (error) {
+    console.warn('⚠️ Failed to cleanup shortcuts:', error.message);
+  }
+  
   console.log("🤖 AI analysis disabled");
 
   // Clean up screenshots when session ends
   if (currentSessionScreenshots.length > 0) {
     cleanupScreenshots();
+  }
+}
+
+// AI caller function for nudge generation
+async function callAIForNudge(messages, provider, apiKey) {
+  try {
+    // Use existing AI chat handler but with specific formatting
+    const result = await postJsonCustom(
+      "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
+      {
+        "content-type": "application/json",
+        "authorization": `Bearer ${apiKey}`,
+      },
+      {
+        model: "qwen-plus",
+        input: { messages },
+        parameters: { 
+          temperature: 0.1, 
+          result_format: "message",
+          max_tokens: 50
+        },
+      }
+    );
+
+    const content = result?.output?.text || 
+                   result?.output?.choices?.[0]?.message?.content || 
+                   "Failed to generate nudge";
+
+    return { content: content };
+  } catch (error) {
+    console.error("❌ AI nudge generation failed:", error);
+    throw error;
+  }
+}
+
+// Get current context metadata
+async function getCurrentContextMeta() {
+  try {
+    const script = `
+      tell application "System Events"
+        set frontApp to first application process whose frontmost is true
+        set appId to bundle identifier of frontApp
+        try
+          set windowTitle to name of front window of frontApp
+        on error
+          set windowTitle to ""
+        end try
+        return appId & "|||" & windowTitle
+      end tell
+    `;
+
+    const { stdout } = await execAsync(`osascript -e '${script}'`);
+    const [appId, windowTitle] = stdout.trim().split('|||');
+
+    return {
+      appId: appId || 'unknown',
+      windowTitle: windowTitle || '',
+      timestamp: Date.now()
+    };
+  } catch (error) {
+    console.warn('⚠️ Failed to get current context meta:', error.message);
+    return {
+      appId: 'unknown',
+      windowTitle: '',
+      timestamp: Date.now()
+    };
+  }
+}
+
+// Fallback to old distraction system
+async function fallbackToOldDistractionSystem(screenshotPath) {
+  try {
+    if (lastOnTaskScreenshotPath && fs.existsSync(lastOnTaskScreenshotPath)) {
+      const prevBuf = fs.readFileSync(lastOnTaskScreenshotPath);
+      const prevB64 = prevBuf.toString("base64");
+      const suggestion = await generateContinuationSuggestion(prevB64, currentWorkContext);
+      currentDistractionMessage = suggestion;
+      showDistractionAlert();
+    } else {
+      // Fallback to current distraction message based on current screen
+      const imageBuffer = fs.existsSync(screenshotPath) ? fs.readFileSync(screenshotPath) : null;
+      const base64Image = imageBuffer ? imageBuffer.toString("base64") : null;
+      const aiMessage = await generateDistractionMessage(base64Image, currentWorkContext);
+      currentDistractionMessage = aiMessage;
+      showDistractionAlert();
+    }
+  } catch (error) {
+    console.error("❌ Failed to generate continuation/distraction message, using default:", error);
+    currentDistractionMessage = "Get back to work";
+    showDistractionAlert();
   }
 }
 
@@ -1702,6 +1961,15 @@ async function analyzeScreenshotForFocus(screenshotPath) {
               if (screenshotPath && fs.existsSync(screenshotPath)) {
                 lastOnTaskScreenshotPath = screenshotPath;
               }
+              
+              // Sample context when semi-focused
+              if (contextSampler && entityCache) {
+                contextSampler.sampleContext('semi_focus_state').then(sample => {
+                  if (sample) {
+                    entityCache.addSample(sample);
+                  }
+                });
+              }
             } catch (_) {}
           } else {
             // Any non-semi status resets the semi tracking
@@ -1710,29 +1978,32 @@ async function analyzeScreenshotForFocus(screenshotPath) {
           }
 
           if (statusText.includes("分心")) {
-            // Prefer a continuation suggestion based on last on-task screenshot
-            (async () => {
-              try {
-                if (lastOnTaskScreenshotPath && fs.existsSync(lastOnTaskScreenshotPath)) {
-                  const prevBuf = fs.readFileSync(lastOnTaskScreenshotPath);
-                  const prevB64 = prevBuf.toString("base64");
-                  const suggestion = await generateContinuationSuggestion(prevB64, currentWorkContext);
-                  currentDistractionMessage = suggestion;
-                  showDistractionAlert();
-                } else {
-                  // Fallback to current distraction message based on current screen
-                  const imageBuffer = fs.existsSync(screenshotPath) ? fs.readFileSync(screenshotPath) : null;
-                  const base64Image = imageBuffer ? imageBuffer.toString("base64") : null;
-                  const aiMessage = await generateDistractionMessage(base64Image, currentWorkContext);
-                  currentDistractionMessage = aiMessage;
-                  showDistractionAlert();
+            // Use new nudge system if available, otherwise fallback to old system
+            if (nudgeGenerator && entityCache && contextSampler) {
+              (async () => {
+                try {
+                  // Sample current context
+                  const currentMeta = await getCurrentContextMeta();
+                  
+                  // Generate nudge using new system
+                  const nudgeMessage = await nudgeGenerator.generate(currentWorkContext, entityCache, currentMeta);
+                  
+                  if (nudgeMessage) {
+                    currentDistractionMessage = nudgeMessage;
+                    showDistractionAlert();
+                    isInDistractionWindow = true;
+                    setTimeout(() => { isInDistractionWindow = false; }, 90000); // 90 seconds
+                  }
+                } catch (error) {
+                  console.error("❌ Nudge generation failed, using fallback:", error);
+                  // Fallback to old system
+                  await fallbackToOldDistractionSystem(screenshotPath);
                 }
-              } catch (error) {
-                console.error("❌ Failed to generate continuation/distraction message, using default:", error);
-                currentDistractionMessage = "Get back to work";
-                showDistractionAlert();
-              }
-            })();
+              })();
+            } else {
+              // Fallback to old system
+              await fallbackToOldDistractionSystem(screenshotPath);
+            }
             
             if (!distractionReminderInterval) {
               distractionReminderInterval = setInterval(() => {
@@ -1773,6 +2044,15 @@ async function analyzeScreenshotForFocus(screenshotPath) {
             try {
               if (screenshotPath && fs.existsSync(screenshotPath)) {
                 lastOnTaskScreenshotPath = screenshotPath;
+              }
+              
+              // Sample context when focused
+              if (contextSampler && entityCache) {
+                contextSampler.sampleContext('focus_state').then(sample => {
+                  if (sample) {
+                    entityCache.addSample(sample);
+                  }
+                });
               }
             } catch (_) {}
           }
@@ -2191,6 +2471,58 @@ ipcMain.handle("ai:test-continuation", async (evt, { workContext }) => {
     const prevB64 = prevBuf.toString("base64");
     const suggestion = await generateContinuationSuggestion(prevB64, workContext || currentWorkContext);
     return { success: true, message: suggestion };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e) };
+  }
+});
+
+// Test nudge system
+ipcMain.handle("nudge:test", async (evt, { workContext }) => {
+  try {
+    if (!nudgeGenerator || !entityCache || !contextSampler) {
+      return { success: false, error: "Nudge system not initialized" };
+    }
+    
+    const currentMeta = await getCurrentContextMeta();
+    const nudgeMessage = await nudgeGenerator.forceGenerate(workContext || currentWorkContext, entityCache, currentMeta);
+    
+    return { success: true, message: nudgeMessage };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e) };
+  }
+});
+
+// Get nudge system stats
+ipcMain.handle("nudge:stats", async () => {
+  try {
+    const stats = {
+      contextSampler: contextSampler ? 'active' : 'inactive',
+      entityCache: entityCache ? entityCache.getStats() : null,
+      nudgeGenerator: nudgeGenerator ? nudgeGenerator.getStats() : null,
+      lastNudgeTime: lastNudgeTime,
+      isInDistractionWindow: isInDistractionWindow
+    };
+    
+    return { success: true, stats };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e) };
+  }
+});
+
+// Force context sampling
+ipcMain.handle("nudge:sample", async () => {
+  try {
+    if (!contextSampler || !entityCache) {
+      return { success: false, error: "Context sampler not initialized" };
+    }
+    
+    const sample = await contextSampler.sampleContext('manual_trigger');
+    if (sample) {
+      entityCache.addSample(sample);
+      return { success: true, sample };
+    } else {
+      return { success: false, error: "Failed to sample context" };
+    }
   } catch (e) {
     return { success: false, error: e?.message || String(e) };
   }
